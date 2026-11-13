@@ -1656,7 +1656,7 @@ function frame(t) {
    El anfitrion (host) ejecuta la simulacion completa del juego. Los demas jugadores
    envian sus teclas por WebSocket y reciben el estado. El servidor solo gestiona la sala y retransmite.
 ===================================================================== */
-const WS_URL = 'wss://bomberman-server.superbombardero.workers.dev/ws';   // tu Worker de Cloudflare
+const WS_URL = 'wss://superbombardero.onrender.com/ws';   // tu Worker de Cloudflare
 const NET = {room:null, host:false, uid:null, slot:-1, meta:null, players:{}, slots:[], inputs:{}, gsubs:[], ws:null, pingT:null, pingAt:0, rtt:0,
   inGame:false, menuOpen:false, lp:null, bc:0, lastSent:null, sentT:0, snapTick:0, seq:0, lastSeq:-1, lastMap:'', mv:0, q:0, placeAt:0, evq:[], busy:false};
 const EVOK = new Set(['place', 'boom', 'item', 'die', 'kick', 'win', 'thud']);
