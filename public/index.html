@@ -41,6 +41,8 @@ button.go:hover,button.go:focus{background:#ff9a1f}
 #knob{position:absolute;left:50%;top:50%;width:17vmin;height:17vmin;margin:-8.5vmin 0 0 -8.5vmin;border-radius:50%;background:rgba(255,255,255,.35);border:.7vmin solid rgba(255,255,255,.8);pointer-events:none}
 #tbomb{position:absolute;right:6vmin;bottom:8vmin;width:30vmin;height:30vmin;border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,rgba(255,120,90,.75),rgba(200,30,30,.65));border:.8vmin solid rgba(255,255,255,.7);color:#fff;font-size:5vmin;text-shadow:.3vmin .3vmin 0 #000}
 #tbomb.on{background:radial-gradient(circle at 35% 30%,rgba(255,220,90,.9),rgba(255,120,20,.8));transform:scale(.94)}
+#tact{position:absolute;right:38vmin;bottom:14vmin;width:20vmin;height:20vmin;border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,rgba(120,220,255,.75),rgba(30,110,200,.65));border:.8vmin solid rgba(255,255,255,.7);color:#fff;font-size:3.6vmin;text-shadow:.3vmin .3vmin 0 #000}
+#tact.on{background:radial-gradient(circle at 35% 30%,rgba(255,255,160,.9),rgba(120,200,40,.8));transform:scale(.94)}
 #tpause{position:absolute;right:2vmin;top:2vmin;width:11vmin;height:11vmin;border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);border:.6vmin solid rgba(255,255,255,.6);color:#fff;font-size:4.5vmin}
 .fld{display:flex;flex-direction:column;gap:.35em;text-align:left;font-size:.85em;color:#9fb0ff}
 input,select{font:inherit;font-size:1.2em;padding:.7em .6em;background:#0d1040;color:#fff;border:.2em solid #9fb0ff;border-radius:.4em;-webkit-user-select:text;user-select:text;outline:none;width:100%}
@@ -149,6 +151,7 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
       <tr><td><b>P / Esc</b></td><td>Pausa · <b>M</b> música · <b>F</b> pantalla completa</td></tr>
      </table>
      <b>Objetos:</b> BOMBA = +1 bomba · FUEGO = +1 alcance · BOTA = velocidad · PATADA = patea bombas · ESCUDO = invulnerable 10 s · CORAZON = vida extra.<br>
+     <b>Huevos:</b> algunos bloques ocultan un HUEVO de color. Recógelo y montarás una criatura que te protege (si te alcanzan, pierdes la montura en vez de morir). Pulsa HABILIDAD (Q / Shift der. / H, mando: gatillos, táctil: botón MONTURA): VERDE = carrera en línea recta · AZUL = lanza una bomba en arco · MORADA = línea de bombas · ROSA = salto sobre bloques · AMARILLA = lanza un bloque blando que se detiene al chocar.<br>
      <b>Cooperativo:</b> si un jugador pierde sus 3 vidas queda eliminado. Cuando su compañero recoja un CORAZON, lo revive con 1 vida. Si ambos quedan eliminados, fin del juego.<br>
      <b>Enemigos:</b> Globo, Baba (te ve y persigue), Avispa (rápida), Fantasma (atraviesa bloques), Robot (inteligente) y el Jefe.
     </div>
@@ -184,6 +187,7 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
 <div id="touch">
  <div id="dpad"><i class="u">▲</i><i class="d">▼</i><i class="l">◀</i><i class="r">▶</i><div id="knob"></div></div>
  <div id="tbomb">BOMBA</div>
+ <div id="tact">MONTURA</div>
  <div id="tpause">II</div>
 </div>
 
@@ -241,6 +245,16 @@ const firebaseConfig = {
 const TS = 48, COLS = 15, ROWS = 13, HUD = 0, SIDE = 180, W = COLS * TS + SIDE * 2, H = HUD + ROWS * TS;
 const FUSE = 140, FL = 34, BSPD = 6, SD_INT = 6, HALF = 17;
 const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
+const DV = {right:[1,0], left:[-1,0], down:[0,1], up:[0,-1]};
+const MK = ['g', 'b', 'm', 'r', 'y'];
+const MOUNTS = {
+  g:{name:'VERDE',    c:'#35c24f', c2:'#1d8a35', cd:70,  ab:'dash'},
+  b:{name:'AZUL',     c:'#3b7cff', c2:'#2352c4', cd:30,  ab:'toss'},
+  m:{name:'MORADA',   c:'#a04bd8', c2:'#6f2aa3', cd:150, ab:'line'},
+  r:{name:'ROSA',     c:'#ff7fb5', c2:'#d84a86', cd:50,  ab:'jump'},
+  y:{name:'AMARILLA', c:'#ffd23a', c2:'#d19a00', cd:100, ab:'block'}
+};
+const AIRDUR = 26, JUMPDUR = 20;
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d');
 cv.width = W; cv.height = H;
@@ -361,7 +375,7 @@ setInterval(() => {
    ENTRADA
 ===================================================================== */
 const keys = {}, keyT = {}, keyP = {};
-const touch = {up:0, down:0, left:0, right:0, bomb:false};
+const touch = {up:0, down:0, left:0, right:0, bomb:false, act:false};
 let state = 'menu';
 const normCode = e => e.code === 'NumpadEnter' ? 'Enter' : e.code;
 const isField = e => e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
@@ -409,6 +423,10 @@ function navMenu(dir) {
   dpad.addEventListener('pointermove', e => { if (e.pointerId === dpId) { e.preventDefault(); dpadSet(e); } });
   dpad.addEventListener('pointerup', dpadEnd); dpad.addEventListener('pointercancel', dpadEnd); dpad.addEventListener('lostpointercapture', dpadEnd);
   bombB.addEventListener('pointerdown', e => { e.preventDefault(); touch.bomb = true; bombB.classList.add('on'); try { navigator.vibrate && navigator.vibrate(15); } catch (x) {} });
+  const actB = document.getElementById('tact');
+  actB.addEventListener('pointerdown', e => { e.preventDefault(); touch.act = true; actB.classList.add('on'); try { navigator.vibrate && navigator.vibrate(15); } catch (x) {} });
+  const actUp = () => actB.classList.remove('on');
+  actB.addEventListener('pointerup', actUp); actB.addEventListener('pointercancel', actUp); actB.addEventListener('pointerleave', actUp);
   const bombUp = () => bombB.classList.remove('on');
   bombB.addEventListener('pointerup', bombUp); bombB.addEventListener('pointercancel', bombUp); bombB.addEventListener('pointerleave', bombUp);
   pauseB.addEventListener('pointerdown', e => { e.preventDefault(); pauseGame(); });
@@ -416,19 +434,19 @@ function navMenu(dir) {
 })();
 
 const CTRL = {
- kb1:{up:[],down:[],left:[],right:[],bomb:[]},
- kb2:{up:[],down:[],left:[],right:[],bomb:[]},
- kb3:{up:[],down:[],left:[],right:[],bomb:[]},
+ kb1:{up:[],down:[],left:[],right:[],bomb:[],act:[]},
+ kb2:{up:[],down:[],left:[],right:[],bomb:[],act:[]},
+ kb3:{up:[],down:[],left:[],right:[],bomb:[],act:[]},
  pad0:{label:'MANDO 1'}, pad1:{label:'MANDO 2'}, pad2:{label:'MANDO 3'}, pad3:{label:'MANDO 4'},
  bot:{label:'BOT (CPU)'}, off:{label:'APAGADO'}
 };
 /* ---------- Teclas configurables (se guardan en el navegador) ---------- */
-const ACTIONS = [['up', 'ARRIBA'], ['down', 'ABAJO'], ['left', 'IZQUIERDA'], ['right', 'DERECHA'], ['bomb', 'BOMBA']];
+const ACTIONS = [['up', 'ARRIBA'], ['down', 'ABAJO'], ['left', 'IZQUIERDA'], ['right', 'DERECHA'], ['bomb', 'BOMBA'], ['act', 'HABILIDAD']];
 const KBS = ['kb1', 'kb2', 'kb3'];
 const DEFBIND = {
-  kb1:{up:['KeyW'],down:['KeyS'],left:['KeyA'],right:['KeyD'],bomb:['Space','KeyE']},
-  kb2:{up:['ArrowUp'],down:['ArrowDown'],left:['ArrowLeft'],right:['ArrowRight'],bomb:['Enter','Numpad0']},
-  kb3:{up:['KeyI'],down:['KeyK'],left:['KeyJ'],right:['KeyL'],bomb:['KeyU','KeyO']}
+  kb1:{up:['KeyW'],down:['KeyS'],left:['KeyA'],right:['KeyD'],bomb:['Space','KeyE'],act:['KeyQ','ShiftLeft']},
+  kb2:{up:['ArrowUp'],down:['ArrowDown'],left:['ArrowLeft'],right:['ArrowRight'],bomb:['Enter','Numpad0'],act:['ShiftRight','Numpad1']},
+  kb3:{up:['KeyI'],down:['KeyK'],left:['KeyJ'],right:['KeyL'],bomb:['KeyU','KeyO'],act:['KeyH','KeyY']}
 };
 const RESERVED = /^(Escape|KeyP|KeyM|KeyF|Tab|F\d+|Meta.*|Control.*|Alt.*|ContextMenu|CapsLock|NumLock|ScrollLock|Pause|PrintScreen|OS.*)$/;
 const BKEY = 'superBombardero.controls.v1';
@@ -438,6 +456,11 @@ let BIND = cloneBind(DEFBIND);
 (function loadBinds() {
   try {
     const raw = JSON.parse(localStorage.getItem(BKEY) || 'null'); if (!raw) return;
+    const used = new Set(); for (const k of KBS) for (const a in raw[k] || {}) for (const c of (raw[k][a] || [])) if (c) used.add(c);
+    for (const k of KBS) if (raw[k] && !Array.isArray(raw[k].act)) {
+      const cand = DEFBIND[k].act.concat(['KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN']).filter(c => !used.has(c));
+      raw[k].act = cand.slice(0, 1); used.add(cand[0]);
+    }
     const seen = new Set();
     for (const k of KBS) for (const [a] of ACTIONS) {
       if (!Array.isArray(raw[k][a])) return;
@@ -464,7 +487,7 @@ function ctrlLabel(c) {
   const b = BIND[c], f = a => b[a].find(Boolean), n = c.slice(2);
   const dirs = [f('up'), f('left'), f('down'), f('right')].join(',');
   const dn = dirs === 'ArrowUp,ArrowLeft,ArrowDown,ArrowRight' ? 'FLECHAS' : dirs === 'KeyW,KeyA,KeyS,KeyD' ? 'WASD' : dirs === 'KeyI,KeyJ,KeyK,KeyL' ? 'IJKL' : [f('up'), f('left'), f('down'), f('right')].map(keyName).join('');
-  return 'TECLADO ' + n + ' (' + dn + '+' + keyName(f('bomb')) + ')';
+  return 'TECLADO ' + n + ' (' + dn + '+' + keyName(f('bomb')) + ' · HAB ' + keyName(f('act')) + ')';
 }
 
 /* ---------- Interfaz de reasignacion ---------- */
@@ -524,7 +547,7 @@ function handleRebind(e) {
 function readCtrl(c, p) {
   if (c.startsWith('pad')) {
     const gp = (navigator.getGamepads ? navigator.getGamepads() : [])[+c[3]];
-    if (!gp) return {dx:0, dy:0, bomb:false};
+    if (!gp) return {dx:0, dy:0, bomb:false, act:false};
     let dx = 0, dy = 0; const b = i => gp.buttons[i] && gp.buttons[i].pressed;
     if (b(14)) dx = -1; else if (b(15)) dx = 1;
     if (b(12)) dy = -1; else if (b(13)) dy = 1;
@@ -533,22 +556,23 @@ function readCtrl(c, p) {
       if (Math.abs(x) > .45 || Math.abs(y) > .45) { if (Math.abs(x) > Math.abs(y)) dx = Math.sign(x); else dy = Math.sign(y); }
     }
     const pr = b(0) || b(1) || b(2) || b(3), edge = pr && !p.prev[c]; p.prev[c] = pr;
-    return {dx, dy, bomb: edge};
+    const pa = b(4) || b(5) || b(6) || b(7), ea = pa && !p.prev[c + 'a']; p.prev[c + 'a'] = pa;
+    return {dx, dy, bomb: edge, act: ea};
   }
   const k = CTRL[c]; let best = null, bt = -1;
   for (const d of ['up', 'down', 'left', 'right']) for (const code of k[d]) if (keys[code] && keyT[code] > bt) { bt = keyT[code]; best = d; }
-  let bomb = false; for (const code of k.bomb) if (keyP[code]) bomb = true;
-  return {dx: best === 'left' ? -1 : best === 'right' ? 1 : 0, dy: best === 'up' ? -1 : best === 'down' ? 1 : 0, bomb};
+  let bomb = false, act = false; for (const code of k.bomb) if (keyP[code]) bomb = true; for (const code of k.act) if (keyP[code]) act = true;
+  return {dx: best === 'left' ? -1 : best === 'right' ? 1 : 0, dy: best === 'up' ? -1 : best === 'down' ? 1 : 0, bomb, act};
 }
 function readInput(p) {
-  if (NET.menuOpen) return {dx:0, dy:0, bomb:false};
-  let dx = 0, dy = 0, bomb = false;
-  for (const c of p.ctrls) { const r = readCtrl(c, p); if (!dx && !dy) { dx = r.dx; dy = r.dy; } if (r.bomb) bomb = true; }
+  if (NET.menuOpen) return {dx:0, dy:0, bomb:false, act:false};
+  let dx = 0, dy = 0, bomb = false, act = false;
+  for (const c of p.ctrls) { const r = readCtrl(c, p); if (!dx && !dy) { dx = r.dx; dy = r.dy; } if (r.bomb) bomb = true; if (r.act) act = true; }
   if (G && (p.local || (!G.net && p === G.players.find(q => !q.bot)))) {
     if (!dx && !dy) { if (touch.left) dx = -1; else if (touch.right) dx = 1; else if (touch.up) dy = -1; else if (touch.down) dy = 1; }
-    if (touch.bomb) bomb = true;
+    if (touch.bomb) bomb = true; if (touch.act) act = true;
   }
-  return {dx, dy, bomb};
+  return {dx, dy, bomb, act};
 }
 
 /* =====================================================================
@@ -572,9 +596,9 @@ function buildLevel(layout, dens, itemChance, withExit, story) {
   const softs = [];
   for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (grid[y][x] === 0 && !isSafe(x, y) && rnd() < dens) { grid[y][x] = 2; softs.push([x, y]); }
   const roll = () => {
-    const w = story ? [['bomb',25],['fire',25],['speed',20],['kick',8],['vest',8],['life',4]] : [['bomb',28],['fire',28],['speed',20],['kick',10],['vest',6]];
+    const w = story ? [['bomb',25],['fire',25],['speed',20],['kick',8],['vest',8],['life',4],['egg',11]] : [['bomb',28],['fire',28],['speed',20],['kick',10],['vest',6],['egg',12]];
     let t = w.reduce((a, b) => a + b[1], 0), r = rnd() * t;
-    for (const [n, v] of w) { if ((r -= v) < 0) return n; } return 'bomb';
+    for (const [n, v] of w) { if ((r -= v) < 0) return n === 'egg' ? 'egg_' + pick(MK) : n; } return 'bomb';
   };
   let exit = null;
   if (withExit && softs.length) { const s = pick(softs); hid[s[1]][s[0]] = 'exit'; exit = {x: s[0], y: s[1], rev: false}; }
@@ -602,7 +626,7 @@ const fbLog = (n, p) => { try { window.FB && window.FB.log && window.FB.log(n, p
 const settings = {chars:[0, 1, 2, 3], slots:['kb1', 'bot', 'bot', 'bot'], map:0, rounds:1, botSkill:1, sudden:true, items:1};
 
 function baseG(mode) {
-  return {mode, players:[], grid:null, hid:null, items:null, fire:null, fo:null, flames:[], bombs:[], enemies:[], parts:[], texts:[],
+  return {mode, players:[], grid:null, hid:null, items:null, fire:null, fo:null, flames:[], bombs:[], sblocks:[], enemies:[], parts:[], texts:[],
     exit:null, exitCd:0, t:0, phase:'intro', phaseT:0, introText:'', introSub:'', clearText:'', time:0, sudden:false, spiral:[], spiralIdx:0,
     sdT:0, endT:0, theme:THEMES.grass, goT:0, sdMsg:0, stage:0, S:null, target:1, round:0, coop:false, overT:0};
 }
@@ -611,17 +635,17 @@ const CKEY = 'superBombardero.chars.v1';
 function makePlayer(i, ctrls, bot, skill) {
   const ch = settings.chars[i];
   return {i, ch, ctrls, bot:!!bot, skill:skill || 1, col:PCOL[i], x:0, y:0, dir:'down', alive:true, bombs:1, range:2, lvl:0, sp:2.2, kick:false,
-    active:0, shield:0, invuln:0, anim:0, mv:false, lives:3, score:0, wins:0, deadT:0, spawn:SPAWNS[i], prev:{}, think:0, tgt:null, wantBomb:false};
+    active:0, shield:0, invuln:0, anim:0, mv:false, mount:null, cd:0, cdMax:1, dash:null, jump:null, lives:3, score:0, wins:0, deadT:0, spawn:SPAWNS[i], prev:{}, think:0, tgt:null, wantBomb:false};
 }
 function placeAtSpawn(p) { p.x = (p.spawn[0] + .5) * TS; p.y = (p.spawn[1] + .5) * TS; p.dir = 'down'; p.mv = false; }
 function resetPlayer(p, full) {
-  placeAtSpawn(p); p.alive = true; p.active = 0; p.deadT = 0; p.tgt = null; p.wantBomb = false; p.think = ri(1, 10);
+  placeAtSpawn(p); p.mount = null; p.dash = null; p.jump = null; p.cd = 0; p.alive = true; p.active = 0; p.deadT = 0; p.tgt = null; p.wantBomb = false; p.think = ri(1, 10);
   if (full) { p.bombs = 1; p.range = 2; p.lvl = 0; p.sp = 2.2; p.kick = false; p.shield = 0; p.invuln = 0; }
 }
 function loadMap(layout, themeKey, dens, itemChance, withExit, story) {
   const m = buildLevel(layout, dens, itemChance, withExit, story);
   G.grid = m.grid; G.hid = m.hid; G.items = m.items; G.fire = m.fire; G.fo = m.fo; G.exit = m.exit;
-  G.flames = []; G.bombs = []; G.enemies = []; G.parts = []; G.texts = []; G.theme = THEMES[themeKey]; G.themeKey = themeKey; G.exitCd = 0;
+  G.flames = []; G.bombs = []; G.sblocks = []; G.enemies = []; G.parts = []; G.texts = []; G.theme = THEMES[themeKey]; G.themeKey = themeKey; G.exitCd = 0;
 }
 
 /* ---------- Historia ---------- */
@@ -685,7 +709,7 @@ function spawnRandomEnemy(type) {
 /* =====================================================================
    FISICA DE JUGADORES
 ===================================================================== */
-function bombAt(x, y) { for (const b of G.bombs) if (!b.dead && b.ox === x && b.oy === y) return b; return null; }
+function bombAt(x, y) { for (const b of G.bombs) if (!b.dead && !b.air && b.ox === x && b.oy === y) return b; return null; }
 function solidFor(x, y, p) {
   if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return true;
   if (G.grid[y][x] !== 0) return true;
@@ -716,13 +740,105 @@ function movePlayer(p, dx, dy, sp) {
   }
 }
 function overlapsTile(p, tx, ty) { return Math.abs(p.x - (tx + .5) * TS) < TS / 2 + HALF && Math.abs(p.y - (ty + .5) * TS) < TS / 2 + HALF; }
-function placeBomb(p) {
-  if (!p.alive) return;
-  const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS);
-  if (p.active >= p.bombs || G.grid[gy][gx] !== 0 || bombAt(gx, gy)) return;
+function maxBombs(p) { return p.bombs + (p.mount === 'm' ? 2 : 0); }
+function placeBombAt(p, gx, gy, quiet) {
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return false;
+  if (p.active >= maxBombs(p) || G.grid[gy][gx] !== 0 || bombAt(gx, gy)) return false;
   const b = {gx, gy, ox:gx, oy:gy, vx:0, vy:0, off:0, timer:FUSE, range:p.range, owner:p, ignore:new Set(), dead:false};
   for (const q of G.players) if (q.alive && overlapsTile(q, gx, gy)) b.ignore.add(q);
-  G.bombs.push(b); p.active++; p.placeT = 16; sfx('place');
+  G.bombs.push(b); p.active++; p.placeT = 16; if (!quiet) sfx('place');
+  return true;
+}
+function placeBomb(p) {
+  if (!p.alive) return;
+  placeBombAt(p, Math.floor(p.x / TS), Math.floor(p.y / TS));
+}
+/* ---------- Monturas: habilidades ---------- */
+function tileFree(x, y) { return x >= 0 && y >= 0 && x < COLS && y < ROWS && G.grid[y][x] === 0 && !bombAt(x, y); }
+function tossBomb(p) {
+  const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS), [dx, dy] = DV[p.dir];
+  let b = bombAt(gx, gy); if (!b) b = bombAt(gx + dx, gy + dy);
+  if (!b) return false;
+  let tg = null;
+  for (const d of [3, 4, 5, 2, 1]) { const x = b.ox + dx * d, y = b.oy + dy * d; if (tileFree(x, y)) { tg = [x, y]; break; } }
+  if (!tg) return false;
+  b.air = {t:0, dur:AIRDUR, sx:b.ox, sy:b.oy}; b.vx = b.vy = 0; b.off = 0;
+  b.gx = b.ox = tg[0]; b.gy = b.oy = tg[1]; b.ignore = new Set();
+  sfx('kick'); return true;
+}
+function landBomb(b) {
+  const a = b.air;
+  let x = b.ox, y = b.oy;
+  if (!tileFree(x, y)) {
+    const dx = Math.sign(x - a.sx), dy = Math.sign(y - a.sy); let f = null;
+    for (let d = 1; d <= 6 && !f; d++) if (tileFree(x + dx * d, y + dy * d)) f = [x + dx * d, y + dy * d];
+    if (f) { x = f[0]; y = f[1]; }
+  }
+  b.air = null; b.gx = b.ox = x; b.gy = b.oy = y; b.off = 0; b.vx = b.vy = 0;
+  for (const p of G.players) if (p.alive && overlapsTile(p, x, y)) b.ignore.add(p);
+  sfx('thud'); puff(x, y, '#ccc');
+}
+function lineBombs(p) {
+  const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS), [dx, dy] = DV[p.dir]; let n = 0;
+  if (placeBombAt(p, gx, gy, true)) n++;
+  for (let i = 1; i < COLS; i++) {
+    const x = gx + dx * i, y = gy + dy * i;
+    if (!tileFree(x, y) || !placeBombAt(p, x, y, true)) break; n++;
+  }
+  if (n) sfx('place');
+  return n > 0;
+}
+function blockTileOk(x, y, skip) {
+  if (!tileFree(x, y) || G.items[y][x] || (G.exit && G.exit.x === x && G.exit.y === y)) return false;
+  for (const q of G.players) if (q.alive && q !== skip && overlapsTile(q, x, y)) return false;
+  for (const e of G.enemies) if (!e.dying && enemyOnTile(e, x, y)) return false;
+  return true;
+}
+function launchBlock(p) {
+  const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS), [dx, dy] = DV[p.dir], x = gx + dx, y = gy + dy;
+  if (!blockTileOk(x, y, p)) return false;
+  G.sblocks.push({x, y, dx, dy, off:0, dead:false}); sfx('thud'); return true;
+}
+function updateBlocks() {
+  for (const k of G.sblocks) {
+    if (k.dead) continue;
+    if (G.fire[k.y][k.x] > 0) { k.dead = true; softFx(k.x, k.y); continue; }
+    if (k.off === 0 && !blockTileOk(k.x + k.dx, k.y + k.dy)) {
+      k.dead = true;
+      if (G.grid[k.y][k.x] === 0 && !bombAt(k.x, k.y)) { G.grid[k.y][k.x] = 2; G.hid[k.y][k.x] = null; puff(k.x, k.y, G.theme.s1); sfx('thud'); }
+      continue;
+    }
+    k.off += 8;
+    if (k.off >= TS) { k.x += k.dx; k.y += k.dy; k.off = 0; }
+  }
+  G.sblocks = G.sblocks.filter(k => !k.dead);
+}
+function useAbility(p) {
+  if (!p.alive || !p.mount || p.cd > 0 || p.dash || p.jump || G.phase !== 'play') return;
+  const M = MOUNTS[p.mount], [dx, dy] = DV[p.dir]; let ok = false;
+  if (M.ab === 'dash') { p.dash = {dx, dy, t:0}; sfx('kick'); ok = true; }
+  else if (M.ab === 'toss') ok = tossBomb(p);
+  else if (M.ab === 'line') ok = lineBombs(p);
+  else if (M.ab === 'block') ok = launchBlock(p);
+  else if (M.ab === 'jump') {
+    const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS);
+    for (const d of [2, 3]) { const x = gx + dx * d, y = gy + dy * d; if (tileFree(x, y)) { p.jump = {sx:p.x, sy:p.y, tx:(x + .5) * TS, ty:(y + .5) * TS, t:0, dur:JUMPDUR}; sfx('kick'); ok = true; break; } }
+  }
+  if (ok) { p.cd = M.cd; p.cdMax = M.cd; }
+}
+function mountTick(p) {
+  if (p.cd > 0) p.cd--;
+  if (p.jump) {
+    const j = p.jump; j.t++; const k = Math.min(1, j.t / j.dur);
+    p.x = j.sx + (j.tx - j.sx) * k; p.y = j.sy + (j.ty - j.sy) * k; p.mv = true; p.anim++;
+    if (j.t >= j.dur) { p.x = j.tx; p.y = j.ty; p.jump = null; sfx('thud'); puff(Math.floor(p.x / TS), Math.floor(p.y / TS), MOUNTS[p.mount] ? MOUNTS[p.mount].c : '#fff'); }
+  } else if (p.dash) {
+    const d = p.dash, ox = p.x, oy = p.y;
+    movePlayer(p, d.dx, d.dy, 9); p.mv = true; p.anim += 2;
+    if (G.t % 2 === 0) G.parts.push({x:p.x, y:p.y + 10, vx:0, vy:0, t:0, life:14, c:MOUNTS[p.mount] ? MOUNTS[p.mount].c : '#fff', s:8, g:0});
+    if (Math.hypot(p.x - ox, p.y - oy) < 1 || ++d.t > 100) p.dash = null;
+  }
+  if (p.remote && (p.jump || p.dash)) { p.tx = p.x; p.ty = p.y; p.accT = G.t; p.cs = (p.cs + 1) & 255; }
 }
 function kickBomb(b, dx, dy) { b.vx = dx; b.vy = dy; b.off = 0; sfx('kick'); }
 function bombCanEnter(b, tx, ty) {
@@ -735,6 +851,7 @@ function bombCanEnter(b, tx, ty) {
 }
 function updateBomb(b) {
   b.timer--;
+  if (b.air) { const a = b.air; a.t++; if (b.timer <= 0) a.t = a.dur; if (a.t >= a.dur) landBomb(b); else return; }
   if (b.vx || b.vy) {
     if (b.off === 0 && !bombCanEnter(b, b.gx + b.vx, b.gy + b.vy)) { b.vx = b.vy = 0; b.ox = b.gx; b.oy = b.gy; }
     if (b.vx || b.vy) {
@@ -805,6 +922,12 @@ function ensureLifeItem() {
   else if (free.length) { const t = pick(free); G.items[t[1]][t[0]] = 'life'; }
 }
 function applyItem(p, t) {
+  if (t.startsWith('egg_')) {
+    const k = t.slice(4), M = MOUNTS[k];
+    p.mount = k; p.dash = null; p.cd = 0; sfx('item'); puff(Math.floor(p.x / TS), Math.floor(p.y / TS), M.c);
+    G.texts.push({x:p.x, y:p.y - 20, t:0, s:'MONTURA ' + M.name, c:M.c});
+    return;
+  }
   switch (t) {
     case 'bomb': p.bombs = Math.min(8, p.bombs + 1); break;
     case 'fire': p.range = Math.min(10, p.range + 1); break;
@@ -821,7 +944,13 @@ function applyItem(p, t) {
 }
 function killPlayer(p, force) {
   if (!p.alive || G.phase !== 'play') return;
-  if (!force && (p.invuln > 0 || p.shield > 0)) return;
+  if (!force && (p.invuln > 0 || p.shield > 0 || p.jump)) return;
+  if (!force && p.mount) {
+    const M = MOUNTS[p.mount]; p.mount = null; p.dash = null; p.invuln = 120; sfx('hit');
+    puff(Math.floor(p.x / TS), Math.floor(p.y / TS), M.c); G.texts.push({x:p.x, y:p.y - 20, t:0, s:'¡MONTURA PERDIDA!', c:M.c});
+    return;
+  }
+  p.mount = null; p.dash = null; p.jump = null;
   p.alive = false; p.deadT = 0; sfx('die');
   if (G.mode !== 'battle') { p.lives--; if (p.lives <= 0 && G.coop && G.players.some(q => q !== p && (q.alive || q.lives > 0))) ensureLifeItem(); }
   puff(Math.floor(p.x / TS), Math.floor(p.y / TS), p.col);
@@ -1055,9 +1184,13 @@ function botStep(p, t) {
 function botInput(p) {
   const sk = SKILL[p.skill];
   if (--p.think <= 0) { p.think = sk.think; botThink(p, sk); }
-  const out = {dx:0, dy:0, bomb:false};
+  const out = {dx:0, dy:0, bomb:false, act:false};
   if (p.wantBomb) { out.bomb = true; p.wantBomb = false; }
   if (p.tgt) { const m = botStep(p, p.tgt); out.dx = m[0]; out.dy = m[1]; }
+  if (p.mount && p.cd <= 0) {
+    if (p.mount === 'm' && out.bomb) { out.bomb = false; out.act = true; }
+    else if (p.mount === 'b' && rnd() < .04) { const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS), [dx, dy] = DV[p.dir]; if (bombAt(gx + dx, gy + dy)) out.act = true; }
+  }
   return out;
 }
 
@@ -1075,12 +1208,14 @@ function updatePlayer(p) {
   else {
   const inp = p.bot ? botInput(p) : readInput(p);
   p.mv = false;
-  if (inp.dx || inp.dy) {
+  if (inp.act) useAbility(p);
+  if (!p.dash && !p.jump && (inp.dx || inp.dy)) {
     p.dir = inp.dx < 0 ? 'left' : inp.dx > 0 ? 'right' : inp.dy < 0 ? 'up' : 'down';
     movePlayer(p, inp.dx, inp.dy, p.sp); p.mv = true; p.anim++;
   }
   if (inp.bomb) placeBomb(p);
   }
+  mountTick(p);
   if (p.invuln > 0) p.invuln--; if (p.shield > 0) p.shield--; if (p.placeT > 0) p.placeT--;
   const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS);
   const it = G.items[gy][gx]; if (it) { G.items[gy][gx] = null; applyItem(p, it); }
@@ -1111,6 +1246,7 @@ function update() {
   for (const p of G.players) updatePlayer(p);
   for (const b of G.bombs) if (!b.dead) updateBomb(b);
   G.bombs = G.bombs.filter(b => !b.dead);
+  updateBlocks();
   updateFx();
   // sudden death
   if (G.mode === 'battle' && settings.sudden && G.time <= 60 * 60) {
@@ -1148,7 +1284,7 @@ function update() {
   }
   keyP_clear();
 }
-function keyP_clear() { for (const k in keyP) keyP[k] = false; touch.bomb = false; }
+function keyP_clear() { for (const k in keyP) keyP[k] = false; touch.bomb = false; touch.act = false; }
 function dropBlock() {
   let s;
   while (G.spiralIdx < G.spiral.length) { s = G.spiral[G.spiralIdx++]; if (G.grid[s[1]][s[0]] !== 1) break; s = null; }
@@ -1235,8 +1371,19 @@ function drawExit() {
   if (open) { const a = G.t * .1; for (let i = 0; i < 4; i++) circ(px + TS / 2 + Math.cos(a + i * 1.57) * 9, py + TS / 2 + Math.sin(a + i * 1.57) * 9, 3, '#fff'); }
   else { ctx.fillStyle = '#999'; ctx.fillRect(px + 12, py + 22, TS - 24, 4); }
 }
+function drawEgg(px, py, k) {
+  const M = MOUNTS[k];
+  ell(px, py + 15, 13, 4, 'rgba(0,0,0,.3)');
+  ctx.strokeStyle = '#1a1020'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(px, py + 1, 12, 15, 0, 0, 7); ctx.fillStyle = '#fff8e6'; ctx.fill(); ctx.stroke();
+  ctx.save(); ctx.beginPath(); ctx.ellipse(px, py + 1, 11, 14, 0, 0, 7); ctx.clip();
+  ctx.fillStyle = M.c; for (const [ox, oy, r] of [[-5, -5, 4], [5, 1, 5], [-4, 7, 4], [3, -9, 3]]) { ctx.beginPath(); ctx.arc(px + ox, py + oy, r, 0, 7); ctx.fill(); }
+  ctx.restore();
+  ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.ellipse(px - 5, py - 7, 2.5, 4.5, -.4, 0, 7); ctx.fill();
+}
 function drawItem(x, y, t) {
   const px = x * TS + TS / 2, py = y * TS + TS / 2 + Math.sin(G.t * .12 + x) * 2;
+  if (t.startsWith('egg_')) { drawEgg(px, py, t.slice(4)); return; }
   const bg = {bomb:'#2a5bd6', fire:'#d6402a', speed:'#1aa6c8', kick:'#d68a1a', vest:'#c9a400', life:'#d62a6a'}[t];
   ctx.fillStyle = '#000'; rr(px - 17, py - 17, 34, 34, 7); ctx.fill();
   ctx.fillStyle = bg; rr(px - 15, py - 15, 30, 30, 6); ctx.fill();
@@ -1249,7 +1396,12 @@ function drawItem(x, y, t) {
   if (t === 'life') { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(px, py + 9); ctx.bezierCurveTo(px - 14, py - 2, px - 7, py - 12, px, py - 4); ctx.bezierCurveTo(px + 7, py - 12, px + 14, py - 2, px, py + 9); ctx.fill(); }
 }
 function drawBomb(b) {
-  const px = (b.gx + .5) * TS + b.vx * b.off, py = (b.gy + .5) * TS + b.vy * b.off + 2;
+  let px = (b.gx + .5) * TS + b.vx * b.off, py = (b.gy + .5) * TS + b.vy * b.off + 2, lift = 0;
+  if (b.air) {
+    const a = b.air, k = Math.min(1, a.t / a.dur), sx = (a.sx + .5) * TS, sy = (a.sy + .5) * TS + 2, tx = (b.ox + .5) * TS, ty = (b.oy + .5) * TS + 2;
+    ell(sx + (tx - sx) * k, sy + (ty - sy) * k + 15, 12, 4, 'rgba(0,0,0,.3)');
+    px = sx + (tx - sx) * k; py = sy + (ty - sy) * k; lift = Math.sin(Math.PI * k) * 58; py -= lift;
+  }
   const s = 1 + .08 * Math.sin(G.t * .25);
   ctx.save(); ctx.translate(px, py); ctx.scale(s, s);
   ell(0, 15, 14, 5, 'rgba(0,0,0,.3)');
@@ -1372,14 +1524,52 @@ function drawBomber(x, y, col, dir, anim, mv, sc, rot, fx) {
   }
   ctx.restore();
 }
+/* Criaturas montables (diseño propio): cuerpo redondo con patas, ojos y un rasgo distinto por color. */
+function drawMount(x, y, k, dir, anim, mv, hop) {
+  const M = MOUNTS[k], side = dir === 'left' || dir === 'right', back = dir === 'up', sg = dir === 'left' ? -1 : 1;
+  const st = mv ? Math.sin(anim * .5) : 0, bob = mv ? Math.abs(Math.sin(anim * .5)) * 1.6 : Math.sin(G.t * .08) * .6;
+  const dark = '#1a1020', cy = 9 - bob;
+  ctx.save(); ctx.translate(x, y); ctx.lineWidth = 2; ctx.strokeStyle = dark; ctx.lineJoin = 'round';
+  const part = (px, py, rx, ry, col, rot) => { ctx.beginPath(); ctx.ellipse(px, py, rx, ry, rot || 0, 0, 7); ctx.fillStyle = col; ctx.fill(); ctx.stroke(); };
+  /* rasgos traseros (se ven detrás del jinete) */
+  if (k === 'r') { for (const s of side ? [-sg * 8] : [-12, 12]) part(s, -4, 5, 13, M.c2, s < 0 ? -.25 : .25); for (const s of side ? [-sg * 8] : [-12, 12]) part(s, -4, 2.6, 9, '#ffd3e6', s < 0 ? -.25 : .25); }
+  if (k === 'g') { for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(s * 15, cy - 4); ctx.lineTo(s * 27, cy - 10 + st * s); ctx.lineTo(s * 17, cy + 5); ctx.closePath(); ctx.fillStyle = M.c2; ctx.fill(); ctx.stroke(); } }
+  if (k === 'm') { const tx = side ? -sg * 20 : 17; ctx.beginPath(); ctx.moveTo(tx - sg * 3, cy + 2); ctx.quadraticCurveTo(tx + 8, cy - 12, tx + 4, cy - 17); ctx.strokeStyle = M.c2; ctx.lineWidth = 5; ctx.stroke(); ctx.strokeStyle = dark; ctx.lineWidth = 2; part(tx + 4, cy - 18, 5, 5, '#2a1840'); }
+  if (k === 'y') { const bx = side ? -sg * 19 : 17; ctx.fillStyle = '#c98a3a'; ctx.fillRect(bx - 7, cy - 14, 14, 14); ctx.strokeRect(bx - 7, cy - 14, 14, 14); ctx.fillStyle = '#e8b25a'; ctx.fillRect(bx - 5, cy - 12, 10, 4); ctx.fillRect(bx - 5, cy - 6, 4, 4); ctx.fillRect(bx + 1, cy - 6, 4, 4); }
+  /* patas */
+  const lw = k === 'b' ? 7.5 : 5.5, lh = k === 'b' ? 5 : 3.6;
+  part(-9 + (back ? 0 : st * 2), 20 - Math.max(0, st) * 3, lw, lh, M.c2);
+  part(9 - (back ? 0 : st * 2), 20 - Math.max(0, -st) * 3, lw, lh, M.c2);
+  /* cuerpo */
+  part(0, cy + 1, 20, 12, M.c);
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.beginPath(); ctx.ellipse(-6, cy - 4, 8, 3, -.2, 0, 7); ctx.fill();
+  ctx.fillStyle = M.c2; ctx.globalAlpha = .55; ctx.beginPath(); ctx.ellipse(0, cy + 8, 15, 3.5, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  /* cara */
+  if (!back) {
+    const fx = side ? sg * 12 : 0, fy = cy + 3;
+    if (side) part(sg * 16, cy + 1, 7, 6.5, M.c); // hocico
+    for (const o of side ? [0] : [-6, 6]) {
+      part(fx + o - (side ? sg * 1 : 0), fy - 1, 3.8, 4.4, '#fff');
+      ctx.fillStyle = dark; ctx.beginPath(); ctx.arc(fx + o + (side ? sg * 1.6 : 0), fy, 1.9, 0, 7); ctx.fill();
+    }
+    if (!side) { ctx.strokeStyle = dark; ctx.beginPath(); ctx.arc(0, fy + 4, 3, .15 * Math.PI, .85 * Math.PI); ctx.stroke(); }
+    else { ctx.fillStyle = '#ff9aa8'; ctx.beginPath(); ctx.arc(fx - sg * 5, fy + 4, 2.4, 0, 7); ctx.fill(); }
+  }
+  ctx.restore();
+}
 function drawPlayer(p) {
   if (!p.alive) {
     if (p.deadT < 70) { const k = p.deadT / 70; ctx.globalAlpha = 1 - k * .6; drawBomber(p.x, p.y - k * 30, p.col, 'down', p.deadT, false, 1 - k * .5, p.deadT * .25, {dead:true, ch:p.ch}); ctx.globalAlpha = 1; }
     return;
   }
   if (p.invuln > 0 && p.invuln < 9000 && Math.floor(G.t / 3) % 2) return;
-  drawBomber(p.x, p.y, p.col, p.dir, p.anim, p.mv, .92, 0, {place:p.placeT || 0, win:G.phase === 'clear', ch:p.ch});
-  if (p.shield > 0 && (p.shield > 120 || Math.floor(G.t / 4) % 2)) { ctx.strokeStyle = 'rgba(120,220,255,.9)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x, p.y - 4, 26, 0, 7); ctx.stroke(); ctx.fillStyle = 'rgba(120,220,255,.18)'; ctx.fill(); }
+  const jk = p.jump ? Math.min(1, p.jump.t / (p.jump.dur || JUMPDUR)) : 0, z = p.jump ? Math.sin(Math.PI * jk) * 36 : 0;
+  if (p.mount && MOUNTS[p.mount]) {
+    ell(p.x, p.y + 20, 20 - z * .15, 6, 'rgba(0,0,0,.3)');
+    drawMount(p.x, p.y - z, p.mount, p.dir, p.anim, p.mv, 0);
+    drawBomber(p.x, p.y - z - 11, p.col, p.dir, p.anim, false, .92, 0, {place:p.placeT || 0, win:G.phase === 'clear', ch:p.ch});
+  } else drawBomber(p.x, p.y, p.col, p.dir, p.anim, p.mv, .92, 0, {place:p.placeT || 0, win:G.phase === 'clear', ch:p.ch});
+  if (p.shield > 0 && (p.shield > 120 || Math.floor(G.t / 4) % 2)) { ctx.strokeStyle = 'rgba(120,220,255,.9)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x, p.y - 4 - z, 26, 0, 7); ctx.stroke(); ctx.fillStyle = 'rgba(120,220,255,.18)'; ctx.fill(); }
   if (G.mode === 'battle' && G.players.filter(q => q.i !== p.i && !q.bot).length === 0 && false) {}
 }
 function drawEnemy(e) {
@@ -1444,12 +1634,14 @@ function drawWorld() {
   drawTerrain();
   drawExit();
   for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (G.items[y][x]) drawItem(x, y, G.items[y][x]);
-  for (const b of G.bombs) drawBomb(b);
+  for (const b of G.bombs) if (!b.air) drawBomb(b);
+  for (const k of (G.sblocks || [])) { ctx.save(); ctx.translate(k.dx * k.off, k.dy * k.off); drawSoft(k.x, k.y); ctx.restore(); }
   const ents = [];
   for (const p of G.players) ents.push({y:p.y, f:() => drawPlayer(p)});
   for (const e of G.enemies) ents.push({y:ecenter(e)[1], f:() => drawEnemy(e)});
   ents.sort((a, b) => a.y - b.y); for (const e of ents) e.f();
   for (const f of G.flames) drawFlame(f);
+  for (const b of G.bombs) if (b.air) drawBomb(b);
   for (const q of G.parts) { ctx.globalAlpha = Math.max(0, 1 - q.t / q.life); ctx.fillStyle = q.c; ctx.fillRect(q.x - q.s / 2, q.y - q.s / 2, q.s, q.s); }
   ctx.globalAlpha = 1;
   for (const t of G.texts) { ctx.globalAlpha = Math.max(0, 1 - t.t / 55); txt(t.s, t.x, t.y, 10, t.c, 'center'); }
@@ -1480,6 +1672,11 @@ function drawHUD() {
     else if (G.coop && isOut(p) && p.deadT > 70) { txt('ELIMINADO', cx, y0 + 102, 9, '#ff6060', 'center'); txt('ESPERA 1UP', cx, y0 + 124, 8, '#9fe8ff', 'center'); }
     else { txt('VIDA ' + Math.max(0, p.lives), cx, y0 + 102, 10, '#ffd34d', 'center'); txt(String(p.score), cx, y0 + 124, 10, '#fff', 'center'); }
     txt('B' + p.bombs + ' F' + p.range + ' V' + p.lvl + (p.kick ? ' K' : ''), cx, y0 + 148, 9, '#9fe8ff', 'center');
+    if (p.mount && MOUNTS[p.mount]) {
+      const M = MOUNTS[p.mount]; txt(M.name, cx, y0 + 168, 8, M.c, 'center');
+      const rdy = p.cd > 0 ? 1 - p.cd / (p.cdMax || 1) : 1;
+      ctx.fillStyle = '#000'; ctx.fillRect(cx - 42, y0 + 174, 84, 8); ctx.fillStyle = rdy >= 1 ? '#7dff7d' : M.c; ctx.fillRect(cx - 41, y0 + 175, 82 * rdy, 6);
+    }
     ctx.restore();
   }
 }
@@ -1679,10 +1876,11 @@ function frame(t) {
 ===================================================================== */
 const WS_URL = 'wss://superbombardero-2.onrender.com/ws';   // servidor en Render
 const NET = {room:null, host:false, uid:null, slot:-1, meta:null, players:{}, slots:[], inputs:{}, gsubs:[], ws:null, pingT:null, pingAt:0, rtt:0,
-  inGame:false, menuOpen:false, lp:null, bc:0, lastSent:null, sentT:0, snapTick:0, seq:0, lastSeq:-1, lastMap:'', mv:0, q:0, placeAt:0, evq:[], busy:false};
-const EVOK = new Set(['place', 'boom', 'item', 'die', 'kick', 'win', 'thud']);
+  inGame:false, menuOpen:false, lp:null, bc:0, lastSent:null, sentT:0, snapTick:0, seq:0, lastSeq:-1, lastMap:'', mv:0, q:0, ac:0, placeAt:0, evq:[], busy:false};
+const EVOK = new Set(['place', 'boom', 'item', 'die', 'kick', 'win', 'thud', 'hit']);
 const DIRN = ['down', 'up', 'left', 'right'];
 const ITC = {bomb:'b', fire:'f', speed:'s', kick:'k', vest:'v', life:'l'}, ITN = {b:'bomb', f:'fire', s:'speed', k:'kick', v:'vest', l:'life'};
+for (const k of MK) { ITC['egg_' + k] = k.toUpperCase(); ITN[k.toUpperCase()] = 'egg_' + k; }
 const myUid = () => USER.uid || ('l_' + USER.id.toLowerCase());
 const netOK = () => !!USER;
 const onMsg = t => { $('onMsg').textContent = t || ''; };
@@ -1861,7 +2059,7 @@ function startOnlineHost() {
     const uid = NET.slots[i], pl = uid && NET.players[uid]; if (!pl) continue;
     let ch = pl.ch | 0; if (used.has(ch)) ch = [0, 1, 2, 3].find(c => !used.has(c)); used.add(ch);
     const mine = uid === NET.uid, p = makePlayer(i, mine ? ['kb1', 'kb2', 'pad0'] : [], false, 1);
-    p.ch = ch; p.uid = uid; p.name = String(pl.name || 'J' + (i + 1)); p.local = mine; p.remote = !mine; p.lastB = ((NET.inputs[uid] || {}).b) | 0; p.cs = 0; p.accT = 0; p.tx = 0; p.ty = 0; p.rmv = false;
+    p.ch = ch; p.uid = uid; p.name = String(pl.name || 'J' + (i + 1)); p.local = mine; p.remote = !mine; p.lastB = ((NET.inputs[uid] || {}).b) | 0; p.lastA = ((NET.inputs[uid] || {}).a) | 0; p.cs = 0; p.accT = 0; p.tx = 0; p.ty = 0; p.rmv = false;
     if (mine) NET.lp = p;
     ps.push(p);
   }
@@ -1883,7 +2081,8 @@ function wallHit(nx, ny) {
 /* El jugador remoto mueve su propio personaje (sin retraso) y el anfitrion valida la posicion: velocidad maxima y paredes. */
 function remoteUpdate(p) {
   const r = NET.inputs[p.uid];
-  if (r && r.q !== undefined && r.q !== p.lastQ) {
+  if (p.dash || p.jump) { p.tx = p.x; p.ty = p.y; p.accT = G.t; p.rmv = false; }
+  else if (r && r.q !== undefined && r.q !== p.lastQ) {
     p.lastQ = r.q;
     const nx = +r.x, ny = +r.y;
     if (isFinite(nx) && isFinite(ny)) {
@@ -1899,23 +2098,26 @@ function remoteUpdate(p) {
   if (!r) return;
   const bn = r.b | 0;
   if (bn > p.lastB) { p.lastB = bn; p.x = p.tx; p.y = p.ty; placeBomb(p); }
+  const an = r.a | 0;
+  if (an > (p.lastA | 0)) { p.lastA = an; if (!p.dash && !p.jump) { p.x = p.tx; p.y = p.ty; } useAbility(p); }
   const kx = Math.sign(r.dx | 0), ky = kx ? 0 : Math.sign(r.dy | 0);
   if (p.kick && (kx || ky)) {
     const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS), b = bombAt(gx + kx, gy + ky);
     if (b && !b.ignore.has(p) && !b.vx && !b.vy && Math.abs(p.x - (gx + .5) * TS) <= 9 && Math.abs(p.y - (gy + .5) * TS) <= 9) kickBomb(b, kx, ky);
   }
 }
-function syncRemoteB() { for (const p of G.players) if (p.remote) { const r = NET.inputs[p.uid]; p.lastB = r ? r.b | 0 : 0; p.lastQ = r ? r.q : undefined; p.tx = p.x; p.ty = p.y; p.accT = G.t; } }
+function syncRemoteB() { for (const p of G.players) if (p.remote) { const r = NET.inputs[p.uid]; p.lastB = r ? r.b | 0 : 0; p.lastA = r ? r.a | 0 : 0; p.lastQ = r ? r.q : undefined; p.tx = p.x; p.ty = p.y; p.accT = G.t; } }
 function hostPublish() {
   if (!G || G.net !== 'host' || ++NET.snapTick % 2) return;      // 30 envios por segundo
   if (!NET.ws || NET.ws.readyState !== 1 || NET.ws.bufferedAmount > 200000) return;
   const P = {};
   for (const p of G.players) P[p.i] = [Math.round(p.x), Math.round(p.y), Math.max(0, DIRN.indexOf(p.dir)), p.alive ? 1 : 0, p.ch, p.mv ? 1 : 0, Math.min(999, p.shield | 0),
-    Math.min(9999, p.invuln | 0), p.bombs, p.range, p.lvl, p.kick ? 1 : 0, p.wins, p.placeT > 0 ? p.placeT : 0, p.cs | 0, p.active | 0].join(',');
-  const bs = G.bombs.map(b => [b.gx, b.gy, b.ox, b.oy, b.vx, b.vy, b.off, b.timer].join(',')).join(';');
+    Math.min(9999, p.invuln | 0), p.bombs, p.range, p.lvl, p.kick ? 1 : 0, p.wins, p.placeT > 0 ? p.placeT : 0, p.cs | 0, p.active | 0, p.mount ? MK.indexOf(p.mount) + 1 : 0, p.jump ? p.jump.t + 1 : 0].join(',');
+  const bs = G.bombs.map(b => [b.gx, b.gy, b.ox, b.oy, b.vx, b.vy, b.off, b.timer, b.air ? b.air.t + 1 : 0, b.air ? b.air.sx : 0, b.air ? b.air.sy : 0].join(',')).join(';');
+  const yk = G.sblocks.map(k => [k.x, k.y, k.dx, k.dy, k.off].join(',')).join(';');
   const fs = G.flames.map(f => [f.x, f.y, f.t, f.kind].join(',')).join(';');
   const st = {s:++NET.seq, ph:G.phase, pt:G.phaseT, tx:G.introText || '', sb:G.introSub || null, ct:G.clearText || null, tm:G.time, rd:G.round, tg:G.target, sd:G.sdMsg, gt:G.goT, th:G.themeKey || 'grass',
-    p:P, b:bs || null, f:fs || null, ev:NET.evq.length ? NET.evq.join(',') : null};
+    p:P, b:bs || null, yk:yk || null, f:fs || null, ev:NET.evq.length ? NET.evq.join(',') : null};
   NET.evq = [];
   wsSend({t:'state', d:st});
   let g = '', it = '';
@@ -1934,7 +2136,7 @@ function onlineEnd(w) {
 function addClientPlayer(i) {
   const uid = NET.slots[i], pl = uid && NET.players[uid];
   const p = {i, ch:pl ? pl.ch | 0 : i, col:PCOL[i], name:pl ? String(pl.name) : 'BOT ' + (i + 1), uid, bot:!pl, x:0, y:0, tx:0, ty:0, dir:'down', alive:true, mv:false, srvMv:false, anim:0,
-    shield:0, invuln:0, placeT:0, deadT:0, wins:0, bombs:1, range:2, lvl:0, sp:2.2, kick:false, lives:3, score:0, prev:{}, ctrls:[], active:0, first:true};
+    shield:0, invuln:0, placeT:0, deadT:0, wins:0, bombs:1, range:2, lvl:0, sp:2.2, kick:false, lives:3, score:0, prev:{}, ctrls:[], active:0, first:true, mount:null, jump:null};
   if (uid && uid === NET.uid) { p.ctrls = ['kb1', 'kb2', 'pad0']; p.local = true; NET.lp = p; }
   G.players.push(p); G.players.sort((a, b) => a.i - b.i);
   return p;
@@ -1987,28 +2189,33 @@ function applyState(st) {
     p.ch = v[4]; p.srvMv = !!v[5]; p.shield = v[6]; p.invuln = v[7]; p.bombs = v[8]; p.range = v[9]; p.lvl = v[10]; p.sp = 2.2 + p.lvl * .4; p.wins = v[12];
     if (v[13] > p.placeT) p.placeT = v[13];
     p.active = v[15] | 0;
+    p.mount = v[16] > 0 ? MK[v[16] - 1] : null; p.jump = v[17] > 0 ? {t:v[17] - 1, dur:JUMPDUR} : null;
     const cs = v[14] | 0; if (p.csv === undefined) p.csv = cs; else if (cs !== p.csv) { p.csv = cs; if (p === NET.lp) { p.x = p.tx; p.y = p.ty; } }
     if (p !== NET.lp) p.dir = DIRN[v[2]] || 'down';
   }
   const old = G.bombs; G.bombs = [];
   if (st.b) for (const s of String(st.b).split(';')) {
     const a = s.split(',').map(Number), nb = {gx:a[0], gy:a[1], ox:a[2], oy:a[3], vx:a[4], vy:a[5], off:a[6], timer:a[7], ignore:new Set(), dead:false};
+    if (a[8] > 0) nb.air = {t:a[8] - 1, dur:AIRDUR, sx:a[9], sy:a[10]};
     const prev = old.find(o => o.ox === nb.ox && o.oy === nb.oy);
     if (prev) nb.ignore = prev.ignore; else if (NET.lp && NET.lp.alive && overlapsTile(NET.lp, nb.ox, nb.oy)) nb.ignore.add(NET.lp);
     G.bombs.push(nb);
   }
   for (const o of old) if (o.pend !== undefined && G.t - o.pend < 40 && !G.bombs.some(b => b.ox === o.ox && b.oy === o.oy)) G.bombs.push(o);
+  G.sblocks = [];
+  if (st.yk) for (const s of String(st.yk).split(';')) { const a = s.split(',').map(Number); G.sblocks.push({x:a[0], y:a[1], dx:a[2], dy:a[3], off:a[4], dead:false}); }
   G.flames = [];
   if (st.f) for (const s of String(st.f).split(';')) { const a = s.split(','); G.flames.push({x:+a[0], y:+a[1], t:+a[2], kind:a[3], o:-1}); }
   if (st.ev) for (const e of String(st.ev).split(',')) { if (e === 'place' && performance.now() - NET.placeAt < 600) continue; sfx(e); }
 }
 function clientUpdate() {
   G.t++; updateFx();
-  for (const b of G.bombs) { b.timer--; for (const q of Array.from(b.ignore)) if (!q.alive || !overlapsTile(q, b.ox, b.oy)) b.ignore.delete(q); }
+  for (const b of G.bombs) { b.timer--; if (b.air && b.air.t < b.air.dur) b.air.t++; for (const q of Array.from(b.ignore)) if (!q.alive || !overlapsTile(q, b.ox, b.oy)) b.ignore.delete(q); }
   if (G.sdMsg > 0) G.sdMsg--; if (G.goT > 0) G.goT--;
   const lp = NET.lp, inp = lp ? readInput(lp) : {dx:0, dy:0, bomb:false};
   for (const p of G.players) {
     if (p.placeT > 0) p.placeT--;
+    if (p.jump && p.jump.t < p.jump.dur) p.jump.t++;
     if (!p.alive) { p.deadT++; p.mv = false; continue; }
     const ex = p.tx - p.x, ey = p.ty - p.y, d = Math.hypot(ex, ey);
     if (p === lp) {                      // mi personaje se mueve al instante (el anfitrion solo valida)
@@ -2029,18 +2236,19 @@ function clientUpdate() {
 }
 function localBomb(p) {            // bomba "optimista": aparece al instante y el anfitrion la confirma
   const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS);
-  if (p.active + G.bombs.filter(b => b.pend !== undefined).length >= p.bombs || G.grid[gy][gx] !== 0 || bombAt(gx, gy)) return;
+  if (p.active + G.bombs.filter(b => b.pend !== undefined).length >= maxBombs(p) || G.grid[gy][gx] !== 0 || bombAt(gx, gy)) return;
   G.bombs.push({gx, gy, ox:gx, oy:gy, vx:0, vy:0, off:0, timer:FUSE, ignore:new Set([p]), dead:false, pend:G.t});
   p.placeT = 16; NET.placeAt = performance.now(); sfx('place');
 }
 function sendInput(inp, lp) {
   const play = G.phase === 'play' && !NET.menuOpen, dx = play ? inp.dx : 0, dy = play ? inp.dy : 0;
   if (play && inp.bomb) NET.bc++;
+  if (play && inp.act) NET.ac = (NET.ac | 0) + 1;
   const x = Math.round(lp.x), y = Math.round(lp.y), d = Math.max(0, DIRN.indexOf(lp.dir)), m = lp.mv ? 1 : 0;
-  const cur = [dx, dy, NET.bc, x, y, d, m].join(','), now = performance.now();
-  if (cur !== NET.lastSent && ((play && inp.bomb) || now - NET.sentT >= 33)) {
+  const cur = [dx, dy, NET.bc, x, y, d, m, NET.ac | 0].join(','), now = performance.now();
+  if (cur !== NET.lastSent && ((play && (inp.bomb || inp.act)) || now - NET.sentT >= 33)) {
     NET.lastSent = cur; NET.sentT = now;
-    wsSend({t:'in', d:{dx, dy, b:NET.bc, x, y, d, m, q:++NET.q}});
+    wsSend({t:'in', d:{dx, dy, b:NET.bc, a:NET.ac | 0, x, y, d, m, q:++NET.q}});
   }
 }
 
