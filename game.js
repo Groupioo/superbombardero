@@ -52,6 +52,11 @@ const EVOK = new Set(['place', 'boom', 'item', 'die', 'kick', 'win', 'thud', 'hi
 
 const rnd = Math.random, ri = (a, b) => a + Math.floor(rnd() * (b - a + 1)), pick = a => a[Math.floor(rnd() * a.length)];
 
+/* ---------- Inicialización de Socket con WebSockets Forzados ---------- */
+const socket = io({
+  transports: ['websocket']
+});
+
 /* ---------- Generación de mapas ---------- */
 function buildLevel(layout, dens, itemChance, withExit, story) {
   const grid = []; for (let y = 0; y < ROWS; y++) grid.push(new Array(COLS).fill(0));
