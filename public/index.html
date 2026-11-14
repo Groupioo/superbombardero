@@ -1871,13 +1871,20 @@ function frame(t) {
    JUEGO ONLINE (Socket.io) · BATALLA hasta 4 jugadores / COOPERATIVO 2 jugadores
    El servidor (server.js + game.js) es AUTORITATIVO: calcula movimiento, colisiones, bombas,
    explosiones, bloques, objetos y muertes. Este cliente solo:
-     1) envia sus INPUTS (direccion + contadores de bomba/habilidad), y
-     2) dibuja el estado que recibe, suavizando posiciones entre snapshots (interpolacion).
+     1) PREDICE su propio movimiento al instante (misma fisica que game.js) y envia comandos numerados (seq),
+     2) RECONCILIA: al llegar un snapshot parte de la posicion autoritativa, descarta los comandos ya procesados
+        (lastProcessedInput) y reaplica los pendientes; el error se corrige suavemente (o salta si es enorme),
+     3) INTERPOLA a los demas jugadores y enemigos con un pequeno buffer (~66 ms) en tiempo de simulacion del servidor.
    Los modos locales (historia 1 jugador, batalla local con bots) siguen ejecutandose en el navegador.
 ===================================================================== */
 const SERVER_URL = '';        // '' = mismo origen que sirve este index.html. Si lo alojas en otro sitio: 'https://TU-APP.onrender.com'
 const NET = {sock:null, room:null, mode:'battle', createMode:'battle', host:false, slot:-1, meta:null, slots:[], max:4, status:'lobby', rtt:0, pingT:null,
-  inGame:false, menuOpen:false, lp:null, bc:0, ac:0, lastSent:'', sentT:0, lastSeq:-1, busy:false, mapV:-1};
+  inGame:false, menuOpen:false, lp:null, lastSeq:-1, busy:false, mapV:-1,
+  /* prediccion / reconciliacion / interpolacion */
+  seq:0, pend:[], out:[], outS:0, prevCode:0, pp:null, err:{x:0, y:0}, follow:false, sb:[], pSfx:[],
+  hz:30, delay:4, offs:[], off:null, rt:null};
+const NETC = {smooth:.9, snapDist:72, minErr:.04, maxPend:120, maxExtra:3};      // smooth: decaimiento del error por tick; snapDist: px a partir de los cuales se teletransporta
+const tmpS = {x:0, y:0};
 const DIRN = ['down', 'up', 'left', 'right'];
 const ETYPES = ['balloon', 'blob', 'fast', 'ghost', 'smart', 'boss'];
 const ITN = {b:'bomb', f:'fire', s:'speed', k:'kick', v:'vest', l:'life'};
@@ -1906,7 +1913,7 @@ async function getSock() {
   const io = await loadIO();
   if (NET.sock) { try { NET.sock.removeAllListeners(); NET.sock.close(); } catch (e) {} }
   if (NET.pingT) { clearInterval(NET.pingT); NET.pingT = null; }
-  const s = io(SERVER_URL || undefined, {transports:['websocket', 'polling'], reconnection:false, timeout:70000});   // timeout largo: Render gratis tarda ~1 min en despertar
+  const s = io(SERVER_URL || undefined, {transports:['websocket'], reconnection:false, timeout:70000});   // timeout largo: Render gratis tarda ~1 min en despertar
   await new Promise((res, rej) => {
     const to = setTimeout(() => { try { s.close(); } catch (e) {} rej(new Error('TIEMPO AGOTADO. REVISA TU CONEXION')); }, 75000);
     s.once('connect', () => { clearTimeout(to); res(); });
@@ -2060,7 +2067,8 @@ function startOnlineClient(d) {
   G = baseG(coop ? 'story' : 'battle'); G.net = 'client'; G.coop = coop;
   G.grid = grid(); G.items = grid().map(r => r.map(() => null)); G.fire = grid(); G.fo = grid(); G.hid = G.items; G.themeKey = 'grass';
   G.phase = 'intro'; G.phaseT = 99999; G.introText = 'CONECTANDO...'; G.mapInit = false;
-  NET.lp = null; NET.lastSeq = -1; NET.lastSent = ''; NET.menuOpen = false; NET.inGame = true; NET.bc = 0; NET.ac = 0;
+  NET.lp = null; NET.lastSeq = -1; NET.menuOpen = false; NET.inGame = true;
+  netReset(d);
   for (const pd of d.players) addClientPlayer(pd);
   G.players.sort((a, b) => a.i - b.i);
   enterPlay();
@@ -2086,83 +2094,203 @@ function applyMap(m) {
   }
   G.mapInit = true;
 }
-/* Snapshot del servidor -> estado de dibujo. Las posiciones son OBJETIVOS: clientUpdate las suaviza cada frame. */
+/* ---------- Prediccion del lado del cliente, reconciliacion e interpolacion ---------- */
+function netReset(d) {
+  NET.seq = 0; NET.pend = []; NET.out = []; NET.outS = 0; NET.prevCode = 0; NET.pp = null; NET.err = {x:0, y:0}; NET.follow = false; NET.sb = []; NET.pSfx = [];
+  NET.hz = (d && d.hz) || 30; NET.delay = Math.max(3, Math.min(5, Math.round(120 / NET.hz)));          // ~2 snapshots (50-83 ms), en ticks de 1/60 s
+  NET.offs = []; NET.off = null; NET.rt = null;
+}
+/* Reloj de interpolacion (en ticks de simulacion del servidor). Se usa el MINIMO de (llegada - tiempo servidor) en una ventana de ~4 s:
+   asi el jitter de los paquetes no mueve el reloj, solo hace falta que el buffer de ~66 ms lo absorba. */
+function netClock() {
+  if (NET.off == null) return;
+  const est = performance.now() * .06 - NET.off - NET.delay;
+  if (NET.rt == null || Math.abs(est - NET.rt) > 10) NET.rt = est; else NET.rt += 1 + (est - NET.rt) * .08;
+}
+function pushSample(o, t, x, y) {
+  const b = o.buf || (o.buf = []), l = b[b.length - 1];
+  if (l && t <= l.t) return;
+  b.push({t, x, y}); if (b.length > 14) b.shift();
+}
+function sampleAt(o, rt, out) {
+  const b = o.buf, n = b ? b.length : 0; if (!n || rt == null) return false;
+  const l = b[n - 1];
+  if (rt >= l.t) {                       // buffer agotado (paquete tardio): extrapola unos pocos ticks y se detiene
+    out.x = l.x; out.y = l.y;
+    if (n > 1) { const a = b[n - 2], dt = l.t - a.t; if (dt > 0 && Math.abs(l.x - a.x) + Math.abs(l.y - a.y) < 100) { const k = Math.min(rt - l.t, NETC.maxExtra) / dt; out.x += (l.x - a.x) * k; out.y += (l.y - a.y) * k; } }
+    return true;
+  }
+  if (rt <= b[0].t) { out.x = b[0].x; out.y = b[0].y; return true; }
+  for (let i = n - 1; i > 0; i--) {
+    const a = b[i - 1], c = b[i];
+    if (rt >= a.t) {
+      if (Math.abs(c.x - a.x) + Math.abs(c.y - a.y) > 100) { out.x = a.x; out.y = a.y; return true; }      // teletransporte (reaparicion): no se interpola
+      const k = (rt - a.t) / (c.t - a.t); out.x = a.x + (c.x - a.x) * k; out.y = a.y + (c.y - a.y) * k; return true;
+    }
+  }
+  out.x = b[0].x; out.y = b[0].y; return true;
+}
+/* Un paso de prediccion del jugador local: MISMA logica que game.js (movePlayer/colisiones con muros, bloques y bombas).
+   La patada no se predice (la decide el servidor): se desactiva temporalmente para no modificar bombas ajenas. */
+function predBomb(lp, c, live) {
+  const gx = Math.floor(lp.x / TS), gy = Math.floor(lp.y / TS);
+  if (gx < 0 || gy < 0 || gx >= COLS || gy >= ROWS) return;
+  let mine = 0; for (const o of G.bombs) if (!o.dead && o.own === lp.i) mine++;
+  if (mine >= maxBombs(lp) || G.grid[gy][gx] !== 0 || bombAt(gx, gy)) return;
+  const b = {gx, gy, ox:gx, oy:gy, vx:0, vy:0, off:0, timer:Math.max(1, FUSE - (G.t - c.t)), range:lp.range, own:lp.i, ignore:new Set(), dead:false, pred:true};
+  for (const q of G.players) if (q.alive && overlapsTile(q, gx, gy)) b.ignore.add(q);
+  G.bombs.push(b);
+  if (live) { lp.placeT = 16; sfx('place'); NET.pSfx.push(performance.now()); }       // el sonido del servidor que llegue despues se omite (ver applyState)
+}
+function predStep(c, live) {
+  const lp = NET.lp, pp = NET.pp, kick = lp.kick, k = c.c & 7;
+  lp.x = pp.x; lp.y = pp.y; lp.kick = false;
+  if (k) {
+    const dx = k === 1 ? -1 : k === 2 ? 1 : 0, dy = k === 3 ? -1 : k === 4 ? 1 : 0;
+    lp.dir = dx < 0 ? 'left' : dx > 0 ? 'right' : dy < 0 ? 'up' : 'down';
+    movePlayer(lp, dx, dy, lp.sp);
+  }
+  if (c.c & 8) predBomb(lp, c, live);
+  lp.kick = kick;
+  for (const b of G.bombs) if (b.ignore.has(lp) && !overlapsTile(lp, b.ox, b.oy)) b.ignore.delete(lp);       // igual que el servidor: ya se bajo de su propia bomba
+  pp.x = lp.x; pp.y = lp.y;
+}
+/* Reconciliacion con la posicion autoritativa r = {sx, sy, ack (lastProcessedInput), dash, jump, was} */
+function reconcile(r) {
+  const lp = NET.lp; if (!lp) return;
+  const dispX = lp.x, dispY = lp.y;                                    // posicion que el jugador esta viendo ahora mismo
+  NET.follow = r.dash || r.jump;                                       // durante dash/salto manda el servidor (no se predice)
+  if (!lp.alive || G.phase !== 'play' || !NET.pp || !r.was) {          // reaparicion / ronda nueva / primer snapshot: sin correccion
+    NET.pend = []; NET.out = []; NET.pp = {x:r.sx, y:r.sy}; NET.err.x = NET.err.y = 0; lp.x = r.sx; lp.y = r.sy; return;
+  }
+  for (const b of NET.sb) { b.ignore.clear(); for (const q of G.players) if ((b.mask >> q.i) & 1) b.ignore.add(q); }   // estado autoritativo de "bombas que puedo atravesar"
+  NET.pend = NET.pend.filter(c => c.s > r.ack);                        // 1) descarta los comandos que el servidor ya proceso
+  NET.pp = {x:r.sx, y:r.sy};                                           // 2) parte de la posicion autoritativa
+  if (!NET.follow) for (const c of NET.pend) predStep(c, false);       // 3) reaplica los que aun no llegaron al servidor
+  if (NET.follow) { NET.err.x = NET.err.y = 0; return; }
+  let ex = dispX - NET.pp.x, ey = dispY - NET.pp.y;                    // 4) el error se absorbe suavemente (lerp) en los siguientes ticks
+  if (Math.hypot(ex, ey) > NETC.snapDist) ex = ey = 0;                 //    solo si la desincronizacion es enorme: teletransporte
+  NET.err.x = ex; NET.err.y = ey; lp.x = NET.pp.x + ex; lp.y = NET.pp.y + ey;
+}
+
+/* Snapshot del servidor -> estado de dibujo. Otros jugadores/enemigos: muestras para interpolar. Jugador local: reconciliacion. */
 function applyState(st) {
   if (!st || !G || G.net !== 'client' || st.s < NET.lastSeq) return;
   NET.lastSeq = st.s;
-  G.phase = st.ph; G.phaseT = st.pt; G.introText = st.tx || ''; G.introSub = st.sb || ''; G.clearText = st.ct || '';
+  const lp = NET.lp;
+  NET.offs.push(performance.now() * .06 - st.t); if (NET.offs.length > 120) NET.offs.shift();
+  let mn = 1e12; for (const o of NET.offs) if (o < mn) mn = o; NET.off = mn;
+  G.phase = st.ph; G.phaseT = st.pt;
+  if (st.ph !== 'play') { G.introText = st.tx || ''; G.introSub = st.sb || ''; G.clearText = st.ct || ''; }
   G.time = st.tm; G.round = st.rd; G.target = st.tg; G.sdMsg = st.sd | 0; G.goT = st.gt | 0; G.stage = st.sg | 0;
+  let lpr = null;
   for (let i = 0; i < 4; i++) {
-    const a = st.p && st.p[i]; if (!a) continue;
+    const v = st.p && st.p[i]; if (!v) continue;
     const p = G.players.find(q => q.i === i); if (!p) continue;
-    const v = a;                      // [x,y,dir,alive,mv,shield,invuln,bombs,range,lvl,kick,wins,placeT,mount,jumpT,lives,score,cd,cdMax]
-    const was = p.alive; p.alive = !!v[3];
+    // v = [x*10,y*10,dir,alive,mv,shield,invuln,bombs,range,lvl,kick,wins,placeT,mount,jumpT,lives,score,cd,cdMax,lastProcessedInput,dash]
+    const sx = v[0] / 10, sy = v[1] / 10, was = p.alive; p.alive = !!v[3];
     if (was && !p.alive) { p.deadT = 0; puff(Math.floor(p.x / TS), Math.floor(p.y / TS), p.col); }
-    p.tx = v[0]; p.ty = v[1];
-    if (p.first || (!was && p.alive)) { p.x = p.tx; p.y = p.ty; p.first = false; }
-    p.srvMv = !!v[4]; p.shield = v[5]; p.invuln = v[6]; p.bombs = v[7]; p.range = v[8]; p.lvl = v[9]; p.sp = 2.2 + p.lvl * .4; p.kick = !!v[10]; p.wins = v[11];
+    if (!p.alive) { p.buf = null; if (p !== lp) { p.x = sx; p.y = sy; } }
+    else { if (p.first || !was) { p.buf = null; if (p !== lp) { p.x = sx; p.y = sy; } } pushSample(p, st.t, sx, sy); }
+    p.first = false; p.srvMv = !!v[4]; p.shield = v[5]; p.invuln = v[6]; p.bombs = v[7]; p.range = v[8]; p.lvl = v[9]; p.sp = 2.2 + p.lvl * .4; p.kick = !!v[10]; p.wins = v[11];
     if (v[12] > p.placeT) p.placeT = v[12];
     p.mount = v[13] > 0 ? MK[v[13] - 1] : null; p.jump = v[14] > 0 ? {t:v[14] - 1, dur:JUMPDUR} : null;
     p.lives = v[15]; p.score = v[16]; p.cd = v[17]; p.cdMax = v[18] || 1;
-    if (p !== NET.lp) p.dir = DIRN[v[2]] || 'down';
+    if (p === lp) lpr = {sx, sy, ack:v[19] | 0, dash:!!v[20], jump:v[14] > 0, was};
+    else p.dir = DIRN[v[2]] || 'down';
   }
-  G.bombs = [];
-  if (st.b) for (const s of String(st.b).split(';')) {
-    const a = s.split(',').map(Number), nb = {gx:a[0], gy:a[1], ox:a[2], oy:a[3], vx:a[4], vy:a[5], off:a[6], timer:a[7], ignore:new Set(), dead:false};
-    if (a[8] > 0) nb.air = {t:a[8] - 1, dur:AIRDUR, sx:a[9], sy:a[10]};
-    G.bombs.push(nb);
+  /* bombas: el servidor solo las reenvia cuando cambian; la mecha la cuenta este cliente */
+  if (st.b !== undefined) {
+    NET.sb = [];
+    if (st.b) for (const s of String(st.b).split(';')) {      // [gx,gy,ox,oy,vx,vy,off,timer,airT,airSx,airSy,ignoreMask,owner]
+      const a = s.split(',').map(Number), nb = {gx:a[0], gy:a[1], ox:a[2], oy:a[3], vx:a[4], vy:a[5], off:a[6], timer:a[7], ignore:new Set(), dead:false, own:a[12], mask:a[11]};
+      if (a[8] > 0) nb.air = {t:a[8] - 1, dur:AIRDUR, sx:a[9], sy:a[10]};
+      for (const q of G.players) if ((a[11] >> q.i) & 1) nb.ignore.add(q);
+      NET.sb.push(nb);
+    }
   }
+  G.bombs = NET.sb.slice();
   G.sblocks = [];
   if (st.yk) for (const s of String(st.yk).split(';')) { const a = s.split(',').map(Number); G.sblocks.push({x:a[0], y:a[1], dx:a[2], dy:a[3], off:a[4], dead:false}); }
-  G.flames = [];
-  if (st.f) for (const s of String(st.f).split(';')) { const a = s.split(','); G.flames.push({x:+a[0], y:+a[1], t:+a[2], kind:a[3], o:-1}); }
-  /* enemigos: se reutiliza el objeto por id para poder suavizar su posicion */
+  if (st.f !== undefined) {                                   // llamas: solo llegan al aparecer nuevas; el cliente las hace expirar
+    G.flames = [];
+    if (st.f) for (const s of String(st.f).split(';')) { const a = s.split(','); G.flames.push({x:+a[0], y:+a[1], t:+a[2], kind:a[3], o:-1}); }
+  }
+  /* enemigos: se reutiliza el objeto por id; cada snapshot agrega una muestra (tiempo del servidor) para interpolar */
   const old = new Map(G.enemies.map(e => [e.id, e])); G.enemies = [];
   if (st.e) for (const a of st.e) {   // [id,type,ax,ay,dx,dy,prog,dying,dieT,hitT,hp,face]
     const type = ETYPES[a[1]] || 'balloon';
     let e = old.get(a[0]);
-    if (!e) e = {id:a[0], type, s:EN[type].s, anim:rnd() * 100, wall:!!EN[type].wall, maxhp:EN[type].hp || 1, rc:null};
+    if (!e) e = {id:a[0], type, s:EN[type].s, anim:rnd() * 100, wall:!!EN[type].wall, maxhp:EN[type].hp || 1, rc:null, buf:null};
     e.ax = a[2]; e.ay = a[3]; e.dx = a[4]; e.dy = a[5]; e.prog = a[6]; e.dying = !!a[7]; e.dieT = a[8]; e.hitT = a[9]; e.hp = a[10]; e.face = a[11];
     e.tc = [(e.ax + e.s / 2) * TS + e.dx * e.prog, (e.ay + e.s / 2) * TS + e.dy * e.prog];
     if (!e.rc) e.rc = e.tc.slice();
+    pushSample(e, st.t, e.tc[0], e.tc[1]);
     G.enemies.push(e);
   }
   G.exit = st.ex ? {x:st.ex[0], y:st.ex[1], rev:true, open:!!st.ex[2]} : null;
   if (st.xt) for (const t of st.xt) G.texts.push({x:t[0], y:t[1], t:0, s:t[2], c:t[3]});
-  if (st.ev) for (const e of String(st.ev).split(',')) sfx(e);
+  if (lpr) reconcile(lpr);                                    // al final: necesita el mapa y las bombas ya actualizados
+  if (st.ev) for (const e of String(st.ev).split(',')) {
+    if (e === 'place' && NET.pSfx.length) {                   // el sonido de mi propia bomba ya sono por prediccion
+      const now = performance.now(); while (NET.pSfx.length && now - NET.pSfx[0] > 1500) NET.pSfx.shift();
+      if (NET.pSfx.length) { NET.pSfx.shift(); continue; }
+    }
+    sfx(e);
+  }
 }
 function clientUpdate() {
   G.t++; updateFx();
   for (const b of G.bombs) { b.timer--; if (b.air && b.air.t < b.air.dur) b.air.t++; }
   if (G.sdMsg > 0) G.sdMsg--; if (G.goT > 0) G.goT--;
+  netClock();
   const lp = NET.lp, inp = lp ? readInput(lp) : {dx:0, dy:0, bomb:false, act:false};
-  if (lp && lp.alive && G.phase === 'play' && (inp.dx || inp.dy)) lp.dir = inp.dx < 0 ? 'left' : inp.dx > 0 ? 'right' : inp.dy < 0 ? 'up' : 'down';
   for (const p of G.players) {
     if (p.placeT > 0) p.placeT--;
     if (p.jump && p.jump.t < p.jump.dur) p.jump.t++;
     if (!p.alive) { p.deadT++; p.mv = false; continue; }
-    const ex = p.tx - p.x, ey = p.ty - p.y, d = Math.hypot(ex, ey);
-    if (d > 96) { p.x = p.tx; p.y = p.ty; } else { p.x += ex * .4; p.y += ey * .4; }       // interpolacion hacia la posicion del servidor
-    p.mv = p.srvMv || d > 1.5; if (p.mv) p.anim++;
+    if (p === lp) continue;
+    if (sampleAt(p, NET.rt, tmpS)) {                                       // otros jugadores: interpolados ~66 ms en el pasado, fluidos a 60 FPS
+      const mvd = Math.hypot(tmpS.x - p.x, tmpS.y - p.y);
+      p.x = tmpS.x; p.y = tmpS.y; p.mv = p.srvMv || mvd > .25;
+    }
+    if (p.mv) p.anim++;
   }
+  if (lp && lp.alive) localTick(lp, inp);
   for (const e of G.enemies) {
     e.anim++;
-    if (!e.tc) continue;
-    const ex = e.tc[0] - e.rc[0], ey = e.tc[1] - e.rc[1];
-    if (Math.hypot(ex, ey) > 96) e.rc = e.tc.slice(); else { e.rc[0] += ex * .4; e.rc[1] += ey * .4; }
+    if (e.tc && sampleAt(e, NET.rt, tmpS)) { e.rc[0] = tmpS.x; e.rc[1] = tmpS.y; }
   }
-  if (lp) sendInput(inp);
   keyP_clear();
 }
-function sendInput(inp) {
-  const play = G.phase === 'play' && !NET.menuOpen, dx = play ? inp.dx : 0, dy = play ? inp.dy : 0;
-  if (play && inp.bomb) NET.bc++;
-  if (play && inp.act) NET.ac++;
-  const cur = dx + ',' + dy + ',' + NET.bc + ',' + NET.ac, now = performance.now();
-  if (cur !== NET.lastSent || now - NET.sentT > 500) {            // solo se envia al cambiar (y un latido cada 0,5 s)
-    NET.lastSent = cur; NET.sentT = now;
-    emit('input', {dx, dy, b:NET.bc, a:NET.ac});
+/* Jugador local: el comando se aplica AL INSTANTE (0 ms) y ademas se envia al servidor numerado con seq. */
+function localTick(lp, inp) {
+  const play = G.phase === 'play' && !NET.menuOpen && !!NET.pp;
+  let code = 0;
+  if (play) {
+    code = inp.dx ? (inp.dx < 0 ? 1 : 2) : inp.dy ? (inp.dy < 0 ? 3 : 4) : 0;
+    if (inp.bomb) code |= 8;
+    if (inp.act) code |= 16;
   }
+  if (play && (inp.dx || inp.dy)) lp.dir = inp.dx < 0 ? 'left' : inp.dx > 0 ? 'right' : inp.dy < 0 ? 'up' : 'down';
+  let c = null;
+  if (code) {
+    c = {s:++NET.seq, c:code, t:G.t}; NET.pend.push(c); if (NET.pend.length > NETC.maxPend) NET.pend.shift();
+    if (!NET.out.length) NET.outS = c.s; NET.out.push(code);
+  }
+  if (NET.follow) {                                                        // dash / salto: lo decide el servidor, se interpola su posicion
+    if (sampleAt(lp, NET.rt, tmpS)) { lp.mv = Math.hypot(tmpS.x - lp.x, tmpS.y - lp.y) > .25; lp.x = tmpS.x; lp.y = tmpS.y; }
+  } else if (NET.pp) {
+    if (c) predStep(c, true);
+    const e = NET.err; e.x *= NETC.smooth; e.y *= NETC.smooth;             // correccion suave del error de reconciliacion
+    if (Math.abs(e.x) < NETC.minErr) e.x = 0; if (Math.abs(e.y) < NETC.minErr) e.y = 0;
+    lp.x = NET.pp.x + e.x; lp.y = NET.pp.y + e.y;
+    lp.mv = play && !!(inp.dx || inp.dy);
+  }
+  if (lp.mv) lp.anim++;
+  /* envio en lotes: el primer comando de un movimiento sale de inmediato; despues cada 2 ticks (~30 paquetes/s) o al haber bomba/habilidad/parada */
+  if (NET.out.length && ((code && !NET.prevCode) || NET.out.length >= 2 || (code & 24) || !code)) { emit('input', {s:NET.outS, c:NET.out}); NET.out = []; }
+  NET.prevCode = code;
 }
 
 /* ---------- Botones del menu online ---------- */
