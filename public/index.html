@@ -3,22 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
+<meta name="theme-color" content="#0b0b18">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Super Bombardero – Estilo 16 bits</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:#0b0b18;overflow:hidden;font-family:'Press Start 2P','Courier New',monospace;color:#fff;-webkit-user-select:none;user-select:none;touch-action:none}
-#stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-#box{position:relative;width:min(100vw,calc(100vh * 1080 / 624));aspect-ratio:1080/624;font-size:calc(min(100vw,calc(100vh * 1080 / 624)) / 118)}
-#stage:fullscreen #box,:fullscreen #box{width:100vw;height:100vh;aspect-ratio:auto}
-:-webkit-full-screen #box{width:100vw;height:100vh;aspect-ratio:auto}
-@media (display-mode:fullscreen){#box{width:100vw;height:100vh;aspect-ratio:auto}}
+html,body{height:100%;background:#0b0b18;overflow:hidden;overscroll-behavior:none;font-family:'Press Start 2P','Courier New',monospace;color:#fff;-webkit-user-select:none;user-select:none;touch-action:none;-webkit-touch-callout:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+#stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+/* --bw/--bh/--fs/--pw los calcula applyLayout() en JS: el juego mantiene SIEMPRE su proporcion (sin deformarse) */
+#box{position:relative;flex:none;width:var(--bw,100vw);height:var(--bh,57.8vw);font-size:var(--fs,8px)}
 canvas{width:100%;height:100%;display:block;image-rendering:pixelated;background:#000}
 #ui{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(8,8,30,.72)}
 #ui.off{display:none}
-.panel{display:flex;flex-direction:column;gap:.8em;align-items:stretch;width:54%;max-height:94%;overflow:auto;padding:1.5em;background:linear-gradient(#1c2260,#10133a);border:.3em solid #ffd34d;border-radius:.6em;box-shadow:0 0 0 .3em #000,0 .8em 2em #000a;text-align:center}
+.panel{display:flex;flex-direction:column;gap:.8em;align-items:stretch;width:calc(var(--pw,100%)*.54);max-width:96%;max-height:94%;overflow:auto;touch-action:pan-y;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:1.5em;background:linear-gradient(#1c2260,#10133a);border:.3em solid #ffd34d;border-radius:.6em;box-shadow:0 0 0 .3em #000,0 .8em 2em #000a;text-align:center}
 .panel.hidden{display:none}
 h1{font-size:3em;line-height:1.25;color:#ffd34d;text-shadow:.1em .1em 0 #d4281e,.2em .2em 0 #000;letter-spacing:.05em}
 h2{font-size:1.9em;color:#ffd34d;text-shadow:.12em .12em 0 #000}
@@ -34,16 +35,16 @@ button.go:hover,button.go:focus{background:#ff9a1f}
 .help td{padding:.25em .4em;border-bottom:1px solid #3a4390}
 #touch{display:none;position:fixed;inset:0;pointer-events:none;z-index:5;touch-action:none;-webkit-touch-callout:none}
 #touch *{touch-action:none;-webkit-tap-highlight-color:transparent}
-#dpad{position:absolute;left:4vmin;bottom:5vmin;width:40vmin;height:40vmin;border-radius:50%;pointer-events:auto;background:radial-gradient(circle,rgba(255,255,255,.10) 0,rgba(255,255,255,.18) 100%);border:.7vmin solid rgba(255,255,255,.45)}
-#dpad i{position:absolute;color:rgba(255,255,255,.75);font-style:normal;font-size:6vmin;line-height:1}
+#dpad{position:absolute;left:var(--dl,4vmin);top:var(--dt,50vmin);width:var(--dd,40vmin);height:var(--dd,40vmin);border-radius:50%;pointer-events:auto;background:radial-gradient(circle,rgba(255,255,255,.10) 0,rgba(255,255,255,.18) 100%);border:calc(var(--dd,40vmin)*.02) solid rgba(255,255,255,.45)}
+#dpad i{position:absolute;color:rgba(255,255,255,.75);font-style:normal;font-size:calc(var(--dd,40vmin)*.15);line-height:1}
 #dpad .u{left:50%;top:4%;transform:translateX(-50%)}#dpad .d{left:50%;bottom:4%;transform:translateX(-50%)}
 #dpad .l{left:5%;top:50%;transform:translateY(-50%)}#dpad .r{right:5%;top:50%;transform:translateY(-50%)}
-#knob{position:absolute;left:50%;top:50%;width:17vmin;height:17vmin;margin:-8.5vmin 0 0 -8.5vmin;border-radius:50%;background:rgba(255,255,255,.35);border:.7vmin solid rgba(255,255,255,.8);pointer-events:none}
-#tbomb{position:absolute;right:6vmin;bottom:8vmin;width:30vmin;height:30vmin;border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,rgba(255,120,90,.75),rgba(200,30,30,.65));border:.8vmin solid rgba(255,255,255,.7);color:#fff;font-size:5vmin;text-shadow:.3vmin .3vmin 0 #000}
+#knob{position:absolute;left:50%;top:50%;width:calc(var(--dd,40vmin)*.42);height:calc(var(--dd,40vmin)*.42);margin:calc(var(--dd,40vmin)*-.21) 0 0 calc(var(--dd,40vmin)*-.21);border-radius:50%;background:rgba(255,255,255,.35);border:calc(var(--dd,40vmin)*.02) solid rgba(255,255,255,.8);pointer-events:none}
+#tbomb{position:absolute;left:var(--bl,60vmin);top:var(--bt,60vmin);width:var(--bd,30vmin);height:var(--bd,30vmin);border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,rgba(255,120,90,.75),rgba(200,30,30,.65));border:calc(var(--bd,30vmin)*.03) solid rgba(255,255,255,.7);color:#fff;font-size:calc(var(--bd,30vmin)*.16);text-shadow:.12em .12em 0 #000;white-space:nowrap}
 #tbomb.on{background:radial-gradient(circle at 35% 30%,rgba(255,220,90,.9),rgba(255,120,20,.8));transform:scale(.94)}
-#tact{position:absolute;right:38vmin;bottom:14vmin;width:20vmin;height:20vmin;border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,rgba(120,220,255,.75),rgba(30,110,200,.65));border:.8vmin solid rgba(255,255,255,.7);color:#fff;font-size:3.6vmin;text-shadow:.3vmin .3vmin 0 #000}
+#tact{position:absolute;left:var(--al,40vmin);top:var(--at,30vmin);width:var(--ad,18vmin);height:var(--ad,18vmin);border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 35% 30%,rgba(120,220,255,.75),rgba(30,110,200,.65));border:calc(var(--ad,18vmin)*.04) solid rgba(255,255,255,.7);color:#fff;font-size:calc(var(--ad,18vmin)*.105);text-shadow:.12em .12em 0 #000;white-space:nowrap}
 #tact.on{background:radial-gradient(circle at 35% 30%,rgba(255,255,160,.9),rgba(120,200,40,.8));transform:scale(.94)}
-#tpause{position:absolute;right:2vmin;top:2vmin;width:11vmin;height:11vmin;border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);border:.6vmin solid rgba(255,255,255,.6);color:#fff;font-size:4.5vmin}
+#tpause{position:absolute;left:var(--pl,88vmin);top:var(--pt,2vmin);width:var(--pd,11vmin);height:var(--pd,11vmin);border-radius:50%;pointer-events:auto;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);border:calc(var(--pd,11vmin)*.06) solid rgba(255,255,255,.6);color:#fff;font-size:calc(var(--pd,11vmin)*.42)}
 .fld{display:flex;flex-direction:column;gap:.35em;text-align:left;font-size:.85em;color:#9fb0ff}
 input,select{font:inherit;font-size:1.2em;padding:.7em .6em;background:#0d1040;color:#fff;border:.2em solid #9fb0ff;border-radius:.4em;-webkit-user-select:text;user-select:text;outline:none;width:100%}
 input:focus,select:focus{border-color:#ffd34d}
@@ -68,6 +69,16 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
 #rmSlots .ccard .sm{font-size:.7em;color:#9fb0ff;min-height:1.2em}
 #rmSlots .rpv{height:13em;width:auto;align-self:center}
 #rmSlots .ccard{padding:.4em;gap:.3em}
+/* ---- Pantallas bajas (movil en horizontal): menus compactos y principal en 2 columnas ---- */
+#box.short .panel{padding:1em;gap:.55em;border-width:.25em}
+#box.short h1{font-size:2.3em}
+#box.short h2{font-size:1.6em}
+#box.short button{padding:.6em .5em}
+#box.short #m-main:not(.hidden){display:grid;grid-template-columns:1fr 1fr;width:min(94%,calc(var(--pw,100%)*.9))}
+#box.short #m-main>h1,#box.short #m-main>.row,#box.short #m-main>button:last-child{grid-column:1/-1}
+#box.short .help{font-size:.85em;line-height:1.7}
+#box.short #onList{max-height:7em!important}
+#box.short #rmSlots .rpv{height:9em}
 </style>
 </head>
 <body>
@@ -75,7 +86,7 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
  <div id="box">
   <canvas id="c" width="1080" height="624"></canvas>
   <div id="ui">
-   <div class="panel hidden" id="m-login" style="width:56%">
+   <div class="panel hidden" id="m-login" style="width:calc(var(--pw,100%)*.56)">
     <h2>CUENTA</h2>
     <p class="sub" id="lgNet" style="font-size:.7em">CONECTANDO...</p>
     <div class="row" id="lgTabs"><button id="tabLogin" class="sel">INICIAR SESION</button><button id="tabReg">REGISTRARSE</button></div>
@@ -120,7 +131,7 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
     <p class="sub" id="onMsg" style="min-height:2.4em;color:#ff7a7a"></p>
     <button data-go="main">VOLVER</button>
    </div>
-   <div class="panel hidden" id="m-room" style="width:80%">
+   <div class="panel hidden" id="m-room" style="width:calc(var(--pw,100%)*.80)">
     <h2>SALA <span id="rmCode" style="color:#fff;letter-spacing:.25em"></span></h2>
     <p class="sub">Comparte este codigo (maximo 4 jugadores). Cada jugador elige su personaje con ◀ ▶.</p>
     <div id="rmSlots" style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6em"></div>
@@ -134,7 +145,7 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
     <p class="sub" id="rmMsg" style="min-height:1.6em;color:#ffd34d"></p>
     <button id="rmLeave">SALIR DE LA SALA</button>
    </div>
-   <div class="panel hidden" id="m-chars" style="width:78%">
+   <div class="panel hidden" id="m-chars" style="width:calc(var(--pw,100%)*.78)">
     <h2>ELEGIR PERSONAJES</h2>
     <p class="sub">Usa ◀ ▶ en cada jugador. Si eliges uno que ya tiene otro jugador, se intercambian. El aro de color del suelo indica el numero de jugador.</p>
     <div id="cgrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6em"></div>
@@ -161,7 +172,7 @@ button.listen{background:#d4281e;border-color:#fff;animation:bl .6s steps(2) inf
     <button data-go="controls">CONFIGURAR CONTROLES</button>
     <button data-go="main">VOLVER</button>
    </div>
-   <div class="panel hidden" id="m-controls" style="width:66%">
+   <div class="panel hidden" id="m-controls" style="width:calc(var(--pw,100%)*.66)">
     <h2>CONTROLES</h2>
     <p class="sub">Elige un teclado, pulsa una casilla y luego la tecla que quieras. Cada accion admite 2 teclas.</p>
     <div class="row" id="ctrlTabs"></div>
@@ -245,7 +256,8 @@ const firebaseConfig = {
 /* =====================================================================
    CONSTANTES
 ===================================================================== */
-const TS = 48, COLS = 15, ROWS = 13, HUD = 0, SIDE = 180, W = COLS * TS + SIDE * 2, H = HUD + ROWS * TS;
+const TS = 48, COLS = 15, ROWS = 13, HUD = 0, SIDE0 = 180, H = HUD + ROWS * TS, MAPW = COLS * TS;
+let SIDE = SIDE0, W = MAPW + SIDE * 2;      // W y SIDE son dinamicos: el lienzo se ensancha para rellenar pantallas panoramicas
 const FUSE = 140, FL = 34, BSPD = 6, SD_INT = 6, HALF = 17;
 const DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
 const DV = {right:[1,0], left:[-1,0], down:[0,1], up:[0,-1]};
@@ -261,6 +273,61 @@ const AIRDUR = 26, JUMPDUR = 20;
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d');
 cv.width = W; cv.height = H;
+
+/* =====================================================================
+   LAYOUT RESPONSIVO
+   - El alto logico es fijo (13 filas) y el ANCHO logico se adapta a la proporcion de la pantalla
+     (entre 1080 y 1560): asi el juego rellena movil/tablet/escritorio sin barras ni deformacion.
+   - Los paneles laterales (HUD) crecen y los controles tactiles viven DENTRO de ellos.
+   - Respeta notch / barra de gestos (safe-area) y el teclado virtual.
+===================================================================== */
+const boxEl = document.getElementById('box'), touchEl = document.getElementById('touch');
+const LAY = {s:1, il:0, ir:0, compact:false, hf:1, pauseW:70};   // s = px CSS por unidad logica; il/ir = margenes seguros en unidades logicas
+const coarseMQ = window.matchMedia('(pointer:coarse)');
+const probe = document.createElement('div');
+probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)';
+document.body.appendChild(probe);
+const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
+let lastVW = 0, lastVH = 0;
+function applyLayout() {
+  const vw = Math.max(1, window.innerWidth), vh = Math.max(1, window.innerHeight);
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && lastVH && vw === lastVW && vh < lastVH * .8) return;   // teclado virtual abierto: no reescalar
+  lastVW = vw; lastVH = vh;
+  const cs = getComputedStyle(probe), num = v => parseFloat(v) || 0;
+  const inT = num(cs.paddingTop), inR = num(cs.paddingRight), inB = num(cs.paddingBottom), inL = num(cs.paddingLeft);
+
+  let w = clampN(Math.round(H * vw / vh), MAPW + SIDE0 * 2, 1560); w += w & 1;
+  const bw = Math.min(vw, vh * w / H), bh = bw * H / w, s = bh / H, ox = (vw - bw) / 2, oy = (vh - bh) / 2;
+  if (w !== W) { W = w; SIDE = (w - MAPW) / 2; cv.width = W; }
+
+  const short = bh < 520, fs = Math.max(9.15 * s, short ? 9 : 8);
+  boxEl.style.setProperty('--bw', bw + 'px'); boxEl.style.setProperty('--bh', bh + 'px');
+  boxEl.style.setProperty('--fs', fs + 'px'); boxEl.style.setProperty('--pw', (fs * 118) + 'px');
+  boxEl.classList.toggle('short', short);
+
+  const padL = Math.max(0, inL - ox), padR = Math.max(0, inR - ox), padT = Math.max(0, inT - oy), padB = Math.max(0, inB - oy);
+  LAY.s = s; LAY.il = padL / s; LAY.ir = padR / s;
+  LAY.compact = coarseMQ.matches; LAY.hf = clampN(6.5 / (9 * s), 1, 1.35);
+
+  /* Controles tactiles: dentro de los paneles laterales; pueden invadir solo la columna de muro del borde del mapa */
+  const gap = Math.max(8, bh * .03), over = TS * s * .9, sideCss = SIDE * s, bottom = oy + bh - padB - gap;
+  const D = clampN(sideCss - padL - gap * 2 + over, bh * .26, bh * .40);
+  const B = clampN(sideCss - padR - gap * 2 + over, bh * .26, bh * .36), A = B * .6, pd = clampN(bh * .1, 34, 52);
+  const bl = ox + bw - padR - gap - B, px = n => Math.round(n) + 'px', st = touchEl.style;
+  st.setProperty('--dd', px(D)); st.setProperty('--dl', px(ox + padL + gap)); st.setProperty('--dt', px(bottom - D));
+  st.setProperty('--bd', px(B)); st.setProperty('--bl', px(bl)); st.setProperty('--bt', px(bottom - B));
+  st.setProperty('--ad', px(A)); st.setProperty('--al', px(bl + (B - A) / 2)); st.setProperty('--at', px(bottom - B - A - gap * .6));
+  st.setProperty('--pd', px(pd)); st.setProperty('--pl', px(ox + bw - padR - gap - pd)); st.setProperty('--pt', px(oy + padT + gap));
+  LAY.pauseW = (pd + gap) / s;
+}
+window.addEventListener('resize', applyLayout);
+window.addEventListener('orientationchange', () => { applyLayout(); setTimeout(applyLayout, 120); setTimeout(applyLayout, 450); });
+document.addEventListener('fullscreenchange', () => { applyLayout(); setTimeout(applyLayout, 150); });
+document.addEventListener('webkitfullscreenchange', () => { applyLayout(); setTimeout(applyLayout, 150); });
+if (window.visualViewport) window.visualViewport.addEventListener('resize', applyLayout);
+if (coarseMQ.addEventListener) coarseMQ.addEventListener('change', applyLayout);
+applyLayout();
 const rnd = Math.random, ri = (a, b) => a + Math.floor(rnd() * (b - a + 1)), pick = a => a[Math.floor(rnd() * a.length)];
 const PCOL = ['#3b6cff', '#ff4040', '#2fc24a', '#ffcc22'];
 const SPAWNS = [[1,1],[13,11],[13,1],[1,11]];
@@ -1653,7 +1720,8 @@ function drawHUD() {
     ctx.fillStyle = g; ctx.fillRect(x0, 0, SIDE, H);
     ctx.fillStyle = '#ffd34d'; ctx.fillRect(side ? x0 : x0 + SIDE - 4, 0, 4, H);
   }
-  const lx = SIDE / 2, rx = W - SIDE / 2;
+  if (LAY.compact) { drawHUDCompact(); return; }
+  const lx = (LAY.il + SIDE) / 2, rx = (W * 2 - SIDE - LAY.ir) / 2;
   if (G.net) txt('PING ' + NET.rtt + ' MS', lx, H - 22, 9, NET.rtt < 120 ? '#7dff7d' : NET.rtt < 250 ? '#ffd34d' : '#ff5050', 'center');
   txt('TIEMPO', lx, 16, 9, '#9fb0ff', 'center');
   ctx.fillStyle = '#000'; rr(lx - 62, 30, 124, 50, 8); ctx.fill();
@@ -1674,6 +1742,41 @@ function drawHUD() {
       const M = MOUNTS[p.mount]; txt(M.name, cx, y0 + 168, 8, M.c, 'center');
       const rdy = p.cd > 0 ? 1 - p.cd / (p.cdMax || 1) : 1;
       ctx.fillStyle = '#000'; ctx.fillRect(cx - 42, y0 + 174, 84, 8); ctx.fillStyle = rdy >= 1 ? '#7dff7d' : M.c; ctx.fillRect(cx - 41, y0 + 175, 82 * rdy, 6);
+    }
+    ctx.restore();
+  }
+}
+function drawHUDCompact() {
+  /* HUD tactil: filas compactas (avatar + texto) en la parte alta de cada panel; abajo quedan libres para los controles */
+  const hf = LAY.hf, fit = (s, size, maxW) => Math.min(size, maxW / Math.max(1, s.length));
+  const la = LAY.il + 8, lb = SIDE - 10, ra = W - SIDE + 10, rb = W - LAY.ir - 8, lc = (la + lb) / 2;
+  txt('TIEMPO', lc, 14, 10, '#9fb0ff', 'center');
+  const bwid = Math.min(124, lb - la);
+  ctx.fillStyle = '#000'; rr(lc - bwid / 2, 26, bwid, 46, 8); ctx.fill();
+  const low = G.time < 30 * 60 && Math.floor(G.t / 15) % 2;
+  txt(fmt(G.time), lc, 50, bwid < 110 ? 18 : 22, low ? '#ff5050' : '#fff', 'center');
+  if (G.net) txt('PING ' + NET.rtt + ' MS', lc, 87, 9, NET.rtt < 120 ? '#7dff7d' : NET.rtt < 250 ? '#ffd34d' : '#ff5050', 'center');
+  const rw = Math.max(60, rb - LAY.pauseW - ra), rc = ra + rw / 2;      // deja libre la esquina del boton de pausa
+  const h1 = G.mode === 'battle' ? 'RONDA ' + G.round : 'ETAPA ' + (G.stage + 1);
+  const h2 = G.mode === 'battle' ? 'META ' + G.target : 'ENEM ' + G.enemies.filter(e => !e.dying).length;
+  txt(h1, rc, 22, fit(h1, 12, rw), '#fff', 'center'); txt(h2, rc, 48, fit(h2, 10, rw), '#ffd34d', 'center');
+  for (const p of G.players) {
+    const left = p.i < 2, xa = left ? la : ra, uw = (left ? lb : rb) - xa, y0 = 104 + (p.i % 2) * 60;
+    const av = uw >= 150 ? 46 : 0, tx = xa + av, tw = uw - av;
+    ctx.save(); ctx.globalAlpha = (p.alive || G.mode !== 'battle') ? 1 : .4;
+    if (av) drawBomber(xa + av / 2 - 2, y0 + 27, p.col, 'down', 0, false, .75, 0, {ch:p.ch});
+    const nm = p.name ? p.name.toUpperCase().slice(0, 10) : (p.i === 0 && !p.bot && USER) ? USER.id.toUpperCase().slice(0, 10) : 'J' + (p.i + 1) + (p.bot ? ' BOT' : '');
+    txt(nm, tx, y0 + 10, fit(nm, 10 * hf, tw), '#fff', 'left');
+    let l2, c2 = '#ffd34d';
+    if (G.mode === 'battle') l2 = 'VICT ' + p.wins;
+    else if (G.coop && isOut(p) && p.deadT > 70) { l2 = 'ELIMINADO'; c2 = '#ff6060'; }
+    else l2 = 'VIDA ' + Math.max(0, p.lives) + ' ' + p.score;
+    txt(l2, tx, y0 + 28, fit(l2, 9 * hf, tw), c2, 'left');
+    const l3 = 'B' + p.bombs + ' F' + p.range + ' V' + p.lvl + (p.kick ? ' K' : '');
+    txt(l3, tx, y0 + 44, fit(l3, 8 * hf, tw), '#9fe8ff', 'left');
+    if (p.mount && MOUNTS[p.mount]) {
+      const M = MOUNTS[p.mount], rdy = p.cd > 0 ? 1 - p.cd / (p.cdMax || 1) : 1, bx = tx, bwb = Math.max(20, tw - 6);
+      ctx.fillStyle = '#000'; ctx.fillRect(bx, y0 + 52, bwb, 7); ctx.fillStyle = rdy >= 1 ? '#7dff7d' : M.c; ctx.fillRect(bx + 1, y0 + 53, (bwb - 2) * rdy, 5);
     }
     ctx.restore();
   }
