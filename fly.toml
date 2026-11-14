@@ -24,4 +24,4 @@ primary_region = 'gru'
   memory_mb = 256
 
 [env]
-  NET_HZ = '60'
+  NET_HZ = '45'
