@@ -325,16 +325,37 @@ function sfx(n) {
     case 'edie': tone(380, .3, 'square', .08, -300); break;
   }
 }
-const LEAD = [523,0,659,0,784,659,0,523, 587,0,698,0,880,698,0,587, 523,0,659,0,784,988,0,784, 698,0,659,0,587,0,523,0];
-const BASS = [131,0,131,0,196,0,196,0, 147,0,147,0,220,0,220,0, 131,0,131,0,196,0,196,0, 175,0,175,0,196,0,131,0];
-let mStep = 0;
+/* Musica de fondo: al empezar una partida suena una de las 3 canciones al azar; al terminar una pasa a otra distinta. */
+const BGM_FILES = ['Bomberman_NES_Music_-_Stage_Theme.mp3', 'Bomberman_NES_Music_-_Find_The_Door.mp3', 'Bomberman_NES_Music_-_Bonus_Stage.mp3'];
+let bgm = null, bgmActive = false, bgmLast = -1;
+function bgmPick() {
+  let i; do { i = Math.floor(Math.random() * BGM_FILES.length); } while (BGM_FILES.length > 1 && i === bgmLast);
+  bgmLast = i;
+  if (!bgm) { bgm = new Audio(); bgm.preload = 'auto'; bgm.volume = .4; bgm.addEventListener('ended', () => { if (bgmActive) bgmPick(); }); }
+  bgm.src = BGM_FILES[i];
+  bgmPlay();
+}
+function bgmPlay() { if (!bgm) return; const p = bgm.play(); if (p && p.catch) p.catch(() => {}); }
+/* Musica del menu / lobby: suena en bucle fuera de las partidas. Si el navegador bloquea el audio antes del primer clic, se reintenta solo. */
+const LOBBY_FILE = '11-Area_Select_Super_Bomberman_3SNES.mp3';
+let lobbyBgm = null;
+function lobbySync(on) {
+  if (!lobbyBgm) { lobbyBgm = new Audio(LOBBY_FILE); lobbyBgm.loop = true; lobbyBgm.preload = 'auto'; lobbyBgm.volume = .4; }
+  if (state === 'menu' && on) { if (lobbyBgm.paused) { const p = lobbyBgm.play(); if (p && p.catch) p.catch(() => {}); } }
+  else if (!lobbyBgm.paused) { lobbyBgm.pause(); if (state === 'play') lobbyBgm.currentTime = 0; }
+}
 setInterval(() => {
-  if (!AC || !musicOn || !sfxOn || state !== 'play') return;
-  const l = LEAD[mStep % 32], b = BASS[mStep % 32];
-  if (l) tone(l, .14, 'square', .025);
-  if (b) tone(b, .2, 'triangle', .06);
-  mStep++;
-}, 165);
+  const on = musicOn && sfxOn;
+  lobbySync(on);
+  if (state === 'play') {
+    if (!bgmActive) { bgmActive = true; bgmPick(); }
+    if (bgm) { if (on && bgm.paused) bgmPlay(); else if (!on && !bgm.paused) bgm.pause(); }
+  } else if (state === 'pause') {
+    if (bgm && !bgm.paused) bgm.pause();
+  } else if (bgmActive) {            // volvio al menu: la proxima partida elegira otra cancion al azar
+    bgmActive = false; if (bgm) bgm.pause();
+  }
+}, 250);
 
 /* =====================================================================
    ENTRADA
@@ -1656,7 +1677,7 @@ function frame(t) {
    El anfitrion (host) ejecuta la simulacion completa del juego. Los demas jugadores
    envian sus teclas por WebSocket y reciben el estado. El servidor solo gestiona la sala y retransmite.
 ===================================================================== */
-const WS_URL = 'wss://superbombardero-2.onrender.com/ws';   // tu Worker de Cloudflare
+const WS_URL = 'wss://superbombardero-2.onrender.com/ws';   // servidor en Render
 const NET = {room:null, host:false, uid:null, slot:-1, meta:null, players:{}, slots:[], inputs:{}, gsubs:[], ws:null, pingT:null, pingAt:0, rtt:0,
   inGame:false, menuOpen:false, lp:null, bc:0, lastSent:null, sentT:0, snapTick:0, seq:0, lastSeq:-1, lastMap:'', mv:0, q:0, placeAt:0, evq:[], busy:false};
 const EVOK = new Set(['place', 'boom', 'item', 'die', 'kick', 'win', 'thud']);
