@@ -326,7 +326,7 @@ function sfx(n) {
   }
 }
 /* Musica de fondo: al empezar una partida suena una de las 3 canciones al azar; al terminar una pasa a otra distinta. */
-const BGM_FILES = ['Bomberman_NES_Music_-_Stage_Theme.mp3', 'Bomberman_NES_Music_-_Find_The_Door.mp3', 'Bomberman_NES_Music_-_Bonus_Stage.mp3'];
+const BGM_FILES = ['Bomberman (NES) Music - Stage Theme.mp3', 'Bomberman (NES) Music - Find The Door.mp3', 'Bomberman (NES) Music - Bonus Stage.mp3'].map(encodeURI);
 let bgm = null, bgmActive = false, bgmLast = -1;
 function bgmPick() {
   let i; do { i = Math.floor(Math.random() * BGM_FILES.length); } while (BGM_FILES.length > 1 && i === bgmLast);
@@ -337,7 +337,7 @@ function bgmPick() {
 }
 function bgmPlay() { if (!bgm) return; const p = bgm.play(); if (p && p.catch) p.catch(() => {}); }
 /* Musica del menu / lobby: suena en bucle fuera de las partidas. Si el navegador bloquea el audio antes del primer clic, se reintenta solo. */
-const LOBBY_FILE = '11-Area_Select_Super_Bomberman_3SNES.mp3';
+const LOBBY_FILE = encodeURI('11-Area Select (Super Bomberman 3)(SNES).mp3');
 let lobbyBgm = null;
 function lobbySync(on) {
   if (!lobbyBgm) { lobbyBgm = new Audio(LOBBY_FILE); lobbyBgm.loop = true; lobbyBgm.preload = 'auto'; lobbyBgm.volume = .4; }
