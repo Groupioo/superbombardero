@@ -4,6 +4,7 @@
    - Sirve /public (index.html y recursos estáticos)
    - Gestiona salas: crear, listar, unirse, salir y cierre automático
    - Game loop autoritativo: física a 60 pasos/s fijos, snapshots a NET_HZ (30) por segundo
+   - Solo WebSocket; el cliente predice su movimiento y el servidor confirma con lastProcessedInput
    - GET /health para monitoreo (Render Health Check / UptimeRobot)
 ===================================================================== */
 const path = require('path');
@@ -23,7 +24,9 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {origin: process.env.CORS_ORIGIN || '*'},        // permite alojar index.html en otro dominio
-  pingInterval: 10000, pingTimeout: 20000, maxHttpBufferSize: 1e5
+  transports: ['websocket'],                              // sin HTTP long-polling (agrega latencia y CPU)
+  perMessageDeflate: false, httpCompression: false,       // paquetes pequenos: comprimir cuesta mas CPU de lo que ahorra
+  pingInterval: 10000, pingTimeout: 20000, maxHttpBufferSize: 1e4
 });
 
 app.disable('x-powered-by');
@@ -101,7 +104,7 @@ function startGame(room) {
   }
   room.game = createGame({mode: room.mode, players: ps, map: room.meta.map, rounds: room.meta.rounds, sudden: room.meta.sudden, items: room.meta.items, botSkill: 1});
   room.status = 'play'; room.last = '';
-  io.to(room.code).emit('start', {mode: room.mode, players: room.game.playersInfo()});
+  io.to(room.code).emit('start', {mode: room.mode, players: room.game.playersInfo(), hz: NET_HZ});
   room.lastMap = ''; room.mapV = 0;
   let last = Date.now(), acc = 0;
   room.loop = setInterval(() => {
@@ -209,7 +212,10 @@ io.on('connection', socket => {
   });
 
   /* Solo se reciben inputs: direccion + contadores de bomba/habilidad. La posicion la decide el servidor. */
+  /* Lote de comandos numerados: {s: seq del primer comando, c: [cmd, cmd, ...]}. El servidor devuelve en cada snapshot
+     el ultimo seq procesado de cada jugador (lastProcessedInput) para que el cliente reconcilie su prediccion. */
   socket.on('input', d => {
+    if (!d || !Array.isArray(d.c)) return;
     const room = rooms.get(sidRoom.get(socket.id));
     if (room && room.game) room.game.setInput(socket.id, d);
   });

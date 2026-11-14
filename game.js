@@ -44,6 +44,10 @@ const EN = {
 const SKILL = [{think: 12, margin: 2, mist: .10}, {think: 7, margin: 10, mist: .03}, {think: 4, margin: 16, mist: 0}];
 const ITC = {bomb: 'b', fire: 'f', speed: 's', kick: 'k', vest: 'v', life: 'l'};
 for (const k of MK) ITC['egg_' + k] = k.toUpperCase();
+const QMAX = 40;          // cola maxima de comandos por jugador (~0,66 s)
+const CREDIT_MAX = 12;    // pasos "de credito" para absorber jitter de red (200 ms)
+const CATCHUP_Q = 3;      // si la cola supera esto, se consume un comando extra por paso (solo con credito)
+const KEYFRAME = 15;      // cada N snapshots se reenvian bombas/llamas aunque no hayan cambiado (0,5 s a 30 Hz)
 const EVOK = new Set(['place', 'boom', 'item', 'die', 'kick', 'win', 'thud', 'hit']);
 
 const rnd = Math.random, ri = (a, b) => a + Math.floor(rnd() * (b - a + 1)), pick = a => a[Math.floor(rnd() * a.length)];
@@ -98,7 +102,7 @@ function createGame(cfg) {
     mode: coopMode ? 'story' : 'battle', coop: coopMode, players: [], grid: null, hid: null, items: null, fire: null, fo: null,
     flames: [], bombs: [], sblocks: [], enemies: [], exit: null, exitCd: 0, t: 0, phase: 'intro', phaseT: 0, introText: '', introSub: '', clearText: '',
     time: 0, sudden: false, spiral: [], spiralIdx: 0, sdT: 0, endT: 0, goT: 0, sdMsg: 0, stage: 0, S: null, target: 1, round: 0, overT: 0,
-    themeKey: 'grass', ev: [], txq: [], seq: 0, finished: null, eid: 0, bossDead: false
+    themeKey: 'grass', ev: [], txq: [], seq: 0, fAdd: 0, sentF: -1, sentB: '', snapN: 0, finished: null, eid: 0, bossDead: false
   };
   const opts = {map: cfg.map | 0, sudden: cfg.sudden !== false, items: cfg.items | 0, rounds: cfg.rounds | 0};
 
@@ -112,12 +116,12 @@ function createGame(cfg) {
     return {i, sid: d.sid || null, name: d.name || ('J' + (i + 1)), ch: d.ch | 0, bot: !!d.bot, skill: cfg.botSkill === undefined ? 1 : cfg.botSkill, x: 0, y: 0, dir: 'down', alive: true,
       bombs: 1, range: 2, lvl: 0, sp: 2.2, kick: false, active: 0, shield: 0, invuln: 0, anim: 0, mv: false, mount: null, cd: 0, cdMax: 1, dash: null, jump: null,
       lives: 3, score: 0, wins: 0, deadT: 0, spawn: SPAWNS[i], think: 0, tgt: null, wantBomb: false, placeT: 0, left: false,
-      inp: {dx: 0, dy: 0, b: 0, a: 0}, lastB: 0, lastA: 0};
+      q: [], rx: 0, ack: 0, credit: 0, inp: {dx: 0, dy: 0, b: 0, a: 0}, lastB: 0, lastA: 0};
   }
   function placeAtSpawn(p) { p.x = (p.spawn[0] + .5) * TS; p.y = (p.spawn[1] + .5) * TS; p.dir = 'down'; p.mv = false; }
   function resetPlayer(p, full) {
     placeAtSpawn(p); p.mount = null; p.dash = null; p.jump = null; p.cd = 0; p.alive = true; p.active = 0; p.deadT = 0; p.tgt = null; p.wantBomb = false; p.think = ri(1, 10);
-    p.lastB = p.inp.b; p.lastA = p.inp.a;
+    p.q.length = 0; p.ack = p.rx; p.credit = 0;           // nueva ronda/reaparicion: se descartan comandos pendientes
     if (full) { p.bombs = 1; p.range = 2; p.lvl = 0; p.sp = 2.2; p.kick = false; p.shield = 0; p.invuln = 0; }
   }
   function loadMap(layout, themeKey, dens, itemChance, withExit, story) {
@@ -320,7 +324,7 @@ function createGame(cfg) {
     if (b.timer <= 0) explodeBomb(b);
   }
   function addFlame(x, y, kind, owner, reveal) {
-    G.flames.push({x, y, t: FL, kind, o: owner});
+    G.flames.push({x, y, t: FL, kind, o: owner}); G.fAdd++;
     G.fire[y][x] = FL; G.fo[y][x] = owner;
     const ex = G.exit;
     if (!reveal && ex && ex.rev && ex.x === x && ex.y === y && G.mode !== 'battle' && G.exitCd <= 0 && !G.S.boss) {
@@ -633,31 +637,45 @@ function createGame(cfg) {
     }
     return out;
   }
-  /* Entrada de un humano: dirección mantenida + contadores de bomba/habilidad (flanco). */
-  function humanInput(p) {
-    const r = p.inp, out = {dx: r.dx, dy: r.dy, bomb: false, act: false};
-    if (r.b > p.lastB) { p.lastB = r.b; out.bomb = true; }
-    if (r.a > p.lastA) { p.lastA = r.a; out.act = true; }
-    return out;
+  /* Entrada de un humano: cola de comandos numerados (seq). Cada paso fisico consume 1 comando, asi el servidor
+     avanza exactamente lo mismo que el cliente predijo localmente.
+     Comando = dir (0 nada, 1 izq, 2 der, 3 arr, 4 abj) | 8 bomba | 16 habilidad. */
+  const CD = [[0, 0], [-1, 0], [1, 0], [0, -1], [0, 1]];
+  function nextCmd(p) {
+    const e = p.q.shift(); if (!e) return null;
+    p.ack = e[0]; const c = e[1], d = CD[c & 7] || CD[0];
+    return {dx: d[0], dy: d[1], bomb: !!(c & 8), act: !!(c & 16)};
   }
-
-  /* ---------- Actualización ---------- */
-  function updatePlayer(p) {
-    if (p.left && p.alive && G.phase === 'play') killPlayer(p, true);
-    if (!p.alive) {
-      p.deadT++;
-      if (G.mode !== 'battle' && p.lives > 0 && p.deadT > 110 && G.phase === 'play') { resetPlayer(p, false); p.invuln = 200; }
-      return;
-    }
-    const inp = p.bot ? botInput(p) : humanInput(p);
-    p.mv = false;
-    if (G.phase !== 'play') { inp.bomb = inp.act = false; inp.dx = inp.dy = 0; }
+  function humanInput(p) {
+    const c = nextCmd(p);
+    if (!c) { if (p.credit < CREDIT_MAX) p.credit++; return {dx: 0, dy: 0, bomb: false, act: false}; }   // sin comando: el jugador esta quieto
+    return c;
+  }
+  /* Aplica habilidad/movimiento/bomba de un comando (sin los temporizadores del jugador). */
+  function applyCmd(p, inp) {
     if (inp.act) useAbility(p);
     if (!p.dash && !p.jump && (inp.dx || inp.dy)) {
       p.dir = inp.dx < 0 ? 'left' : inp.dx > 0 ? 'right' : inp.dy < 0 ? 'up' : 'down';
       movePlayer(p, inp.dx, inp.dy, p.sp); p.mv = true; p.anim++;
     }
     if (inp.bomb) placeBomb(p);
+  }
+
+  /* ---------- Actualización ---------- */
+  function updatePlayer(p) {
+    if (p.left && p.alive && G.phase === 'play') killPlayer(p, true);
+    if (!p.alive) {
+      p.deadT++; p.q.length = 0; p.ack = p.rx;
+      if (G.mode !== 'battle' && p.lives > 0 && p.deadT > 110 && G.phase === 'play') { resetPlayer(p, false); p.invuln = 200; }
+      return;
+    }
+    const inp = p.bot ? botInput(p) : humanInput(p);
+    p.mv = false;
+    if (G.phase !== 'play') { inp.bomb = inp.act = false; inp.dx = inp.dy = 0; }
+    applyCmd(p, inp);
+    /* recuperar retraso de red: si se acumulo cola, se consume un comando extra
+       (limitado por credito => no hay ganancia neta de velocidad) */
+    if (!p.bot && p.alive && p.q.length > CATCHUP_Q && p.credit > 0) { const c2 = nextCmd(p); if (c2) { p.credit--; applyCmd(p, c2); } }
     mountTick(p);
     if (p.invuln > 0) p.invuln--; if (p.shield > 0) p.shield--; if (p.placeT > 0) p.placeT--;
     const gx = Math.floor(p.x / TS), gy = Math.floor(p.y / TS);
@@ -706,6 +724,7 @@ function createGame(cfg) {
   function step() {
     if (G.phase === 'done') return;
     G.t++;
+    if (G.phase === 'intro' || G.phase === 'clear' || G.phase === 'over') for (const p of G.players) if (!p.bot) { p.q.length = 0; p.ack = p.rx; }   // fuera de juego no se acumulan comandos
     if (G.phase === 'intro') { if (--G.phaseT <= 0) { G.phase = 'play'; G.goT = 50; } updateFx(); return; }
     if (G.phase === 'clear') { G.phaseT--; updateFx(); for (const b of G.bombs) b.timer = 9999; if (G.phaseT <= 0) afterClear(); return; }
     if (G.phase === 'over') {
@@ -754,31 +773,40 @@ function createGame(cfg) {
 
   /* ---------- Interfaz hacia server.js ---------- */
   function setInput(sid, d) {
-    const p = G.players.find(q => q.sid === sid && !q.bot); if (!p || !d) return;
-    const dx = Math.sign(+d.dx || 0), dy = Math.sign(+d.dy || 0);
-    p.inp.dx = dx; p.inp.dy = dx ? 0 : dy;
-    const b = d.b | 0, a = d.a | 0;
-    if (b > p.inp.b) p.inp.b = Math.min(b, p.inp.b + 3);     // un cliente no puede acumular rafagas de bombas
-    if (a > p.inp.a) p.inp.a = Math.min(a, p.inp.a + 3);
+    const p = G.players.find(q => q.sid === sid && !q.bot); if (!p || !d || !Array.isArray(d.c)) return;
+    const s0 = d.s | 0, n = Math.min(d.c.length, 16);
+    for (let k = 0; k < n; k++) {
+      const seq = s0 + k; if (seq <= p.rx) continue;               // duplicado / ya recibido
+      p.rx = seq;
+      if (p.q.length < QMAX) p.q.push([seq, (d.c[k] | 0) & 31]);
+    }
   }
   function removePlayer(sid) {
     const p = G.players.find(q => q.sid === sid); if (!p) return;
-    p.left = true; p.sid = null; p.inp.dx = p.inp.dy = 0;
+    p.left = true; p.sid = null; p.q.length = 0;
     if (G.mode !== 'battle') { p.lives = 0; if (p.alive && G.phase === 'play') killPlayer(p, true); }
   }
-  const r0 = Math.round;
+  const r1 = v => Math.round(v * 10);              // posiciones en decimas (entero): precision suficiente para reconciliar sin deriva
+  const maskOf = b => { let m = 0; for (const q of b.ignore) m |= 1 << q.i; return m; };
+  const bombRec = (b, withTimer) => [b.gx, b.gy, b.ox, b.oy, b.vx, b.vy, b.off, withTimer ? b.timer : 0, b.air ? b.air.t + 1 : 0, b.air ? b.air.sx : 0, b.air ? b.air.sy : 0, maskOf(b), b.owner ? b.owner.i : -1].join(',');
   function snapshot() {
+    const kf = G.snapN++ % KEYFRAME === 0, play = G.phase === 'play';
     const P = {};
-    for (const p of G.players) P[p.i] = [r0(p.x), r0(p.y), Math.max(0, DIRN.indexOf(p.dir)), p.alive ? 1 : 0, p.mv ? 1 : 0, Math.min(999, p.shield | 0), Math.min(9999, p.invuln | 0),
-      p.bombs, p.range, p.lvl, p.kick ? 1 : 0, p.wins, p.placeT > 0 ? p.placeT : 0, p.mount ? MK.indexOf(p.mount) + 1 : 0, p.jump ? p.jump.t + 1 : 0, p.lives, p.score, p.cd | 0, p.cdMax | 0];
-    const bs = G.bombs.map(b => [b.gx, b.gy, b.ox, b.oy, b.vx, b.vy, b.off, b.timer, b.air ? b.air.t + 1 : 0, b.air ? b.air.sx : 0, b.air ? b.air.sy : 0].join(',')).join(';');
-    const yk = G.sblocks.map(k => [k.x, k.y, k.dx, k.dy, k.off].join(',')).join(';');
-    const fs = G.flames.map(f => [f.x, f.y, f.t, f.kind].join(',')).join(';');
-    const es = G.enemies.map(e => [e.id, ETYPES.indexOf(e.type), e.ax, e.ay, e.dx, e.dy, +e.prog.toFixed(1), e.dying ? 1 : 0, e.dieT, e.hitT, e.hp, e.face]);
-    const ex = G.exit && G.exit.rev ? [G.exit.x, G.exit.y, G.exit.open ? 1 : 0] : null;
-    const st = {s: ++G.seq, ph: G.phase === 'done' ? 'clear' : G.phase, pt: G.phaseT, tx: G.introText || '', sb: G.introSub || null, ct: G.clearText || null, tm: G.time, rd: G.round, tg: G.target,
-      sd: G.sdMsg, gt: G.goT, sg: G.stage, p: P, b: bs || null, yk: yk || null, f: fs || null, e: es.length ? es : null, ex,
-      ev: G.ev.length ? G.ev.join(',') : null, xt: G.txq.length ? G.txq : null};
+    // [x*10,y*10,dir,alive,mv,shield,invuln,bombs,range,lvl,kick,wins,placeT,mount,jumpT,lives,score,cd,cdMax, lastProcessedInput, dash]
+    for (const p of G.players) P[p.i] = [r1(p.x), r1(p.y), Math.max(0, DIRN.indexOf(p.dir)), p.alive ? 1 : 0, p.mv ? 1 : 0, Math.min(999, p.shield | 0), Math.min(9999, p.invuln | 0),
+      p.bombs, p.range, p.lvl, p.kick ? 1 : 0, p.wins, p.placeT > 0 ? p.placeT : 0, p.mount ? MK.indexOf(p.mount) + 1 : 0, p.jump ? p.jump.t + 1 : 0, p.lives, p.score, p.cd | 0, p.cdMax | 0, p.ack, p.dash ? 1 : 0];
+    const st = {s: ++G.seq, t: G.t, ph: G.phase === 'done' ? 'clear' : G.phase, pt: G.phaseT, tm: G.time, rd: G.round, tg: G.target, sd: G.sdMsg, gt: G.goT, sg: G.stage, p: P};
+    if (!play) { st.tx = G.introText || ''; st.sb = G.introSub || null; st.ct = G.clearText || null; }       // textos solo fuera de juego
+    // bombas: solo se reenvian si cambian (la mecha la cuenta el cliente) o en keyframe
+    const bk = G.bombs.map(b => bombRec(b, false)).join(';');
+    if (kf || bk !== G.sentB) { G.sentB = bk; st.b = G.bombs.map(b => bombRec(b, true)).join(';'); }
+    const yk = G.sblocks.map(k => [k.x, k.y, k.dx, k.dy, k.off].join(',')).join(';'); if (yk) st.yk = yk;
+    // llamas: solo si aparecieron nuevas (el cliente las hace expirar solo) o en keyframe
+    if (kf || G.fAdd !== G.sentF) { G.sentF = G.fAdd; st.f = G.flames.map(f => [f.x, f.y, f.t, f.kind].join(',')).join(';'); }
+    if (G.enemies.length) st.e = G.enemies.map(e => [e.id, ETYPES.indexOf(e.type), e.ax, e.ay, e.dx, e.dy, +e.prog.toFixed(1), e.dying ? 1 : 0, e.dieT, e.hitT, e.hp, e.face]);
+    if (G.exit && G.exit.rev) st.ex = [G.exit.x, G.exit.y, G.exit.open ? 1 : 0];
+    if (G.ev.length) st.ev = G.ev.join(',');
+    if (G.txq.length) st.xt = G.txq;
     G.ev = []; G.txq = [];
     return st;
   }
